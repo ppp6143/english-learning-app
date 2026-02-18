@@ -38,6 +38,10 @@ export default function HighlightOverlay({
                 const width = (word.bbox.x1 - word.bbox.x0) * scaleX;
                 const height = (word.bbox.y1 - word.bbox.y0) * scaleY;
 
+                // Clamp micro-angles to 0 to prevent sub-pixel artifacts
+                const rawAngle = word.angle ?? 0;
+                const angle = Math.abs(rawAngle) < 0.5 ? 0 : rawAngle;
+
                 return (
                     <button
                         key={`${word.text}-${index}`}
@@ -45,7 +49,7 @@ export default function HighlightOverlay({
                        transition-all duration-200 ease-out
                        cursor-pointer focus:outline-none focus:ring-2 focus:ring-white/50
                        ${isHighlighted
-                                ? 'hover:scale-105 hover:brightness-125'
+                                ? 'hover:brightness-125'
                                 : 'hover:bg-white/10 hover:ring-1 hover:ring-white/20'
                             }`}
                         style={{
@@ -55,6 +59,8 @@ export default function HighlightOverlay({
                             height,
                             backgroundColor: isHighlighted ? style.bgColor : 'transparent',
                             border: isHighlighted ? `1.5px solid ${style.borderColor}` : '1.5px solid transparent',
+                            transform: angle !== 0 ? `rotate(${angle}deg)` : undefined,
+                            transformOrigin: 'center center',
                         }}
                         onClick={(e) => {
                             e.stopPropagation();

@@ -14,8 +14,36 @@ import {
     getRelativeDifficulty,
     getHighlightStyle,
 } from '@/src/lib/wordLevels';
-import { OcrWord } from '@/src/lib/types';
+import { OcrWord, OcrResult } from '@/src/lib/types';
 import { prefetchTranslations, clearTranslationCache, translateSingleWord } from '@/src/lib/translationCache';
+
+/** Rotate an image on a canvas by the given radians and return the new data URL + dimensions */
+function rotateImageOnCanvas(
+    imgSrc: string,
+    radians: number
+): Promise<{ dataUrl: string; width: number; height: number }> {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            const cos = Math.abs(Math.cos(radians));
+            const sin = Math.abs(Math.sin(radians));
+            const newW = Math.round(img.naturalWidth * cos + img.naturalHeight * sin);
+            const newH = Math.round(img.naturalWidth * sin + img.naturalHeight * cos);
+
+            const canvas = document.createElement('canvas');
+            canvas.width = newW;
+            canvas.height = newH;
+            const ctx = canvas.getContext('2d')!;
+            ctx.translate(newW / 2, newH / 2);
+            ctx.rotate(radians);
+            ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+
+            resolve({ dataUrl: canvas.toDataURL('image/png'), width: newW, height: newH });
+        };
+        img.onerror = reject;
+        img.src = imgSrc;
+    });
+}
 
 export default function Home() {
     // User's current CEFR level
@@ -74,13 +102,25 @@ export default function Home() {
                 setImageNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
 
                 // Start OCR automatically
-                const results = await analyze(dataUrl, userLevel);
-                setWords(results);
+                const ocrResult = await analyze(dataUrl, userLevel);
+                setWords(ocrResult.words);
+
+                // If Tesseract applied significant rotation, rotate the displayed image to match
+                const rad = ocrResult.rotateRadians;
+                if (rad !== null && Math.abs(rad) >= 0.005) {
+                    try {
+                        const rotated = await rotateImageOnCanvas(dataUrl, rad);
+                        setImageDataUrl(rotated.dataUrl);
+                        setImageNaturalSize({ width: rotated.width, height: rotated.height });
+                    } catch {
+                        // Rotation failed — keep original image
+                    }
+                }
 
                 // Pre-fetch translations in background
                 setIsTranslating(true);
                 await prefetchTranslations(
-                    results.map(w => ({ text: w.text, context: w.context })),
+                    ocrResult.words.map(w => ({ text: w.text, context: w.context })),
                     (updatedCache) => setTranslationCache({ ...updatedCache })
                 );
                 setIsTranslating(false);
@@ -279,8 +319,8 @@ export default function Home() {
                             {words.length > 0 && (
                                 <button
                                     onClick={async () => {
-                                        const results = await analyze(imageDataUrl, userLevel);
-                                        setWords(results);
+                                        const ocrResult = await analyze(imageDataUrl, userLevel);
+                                        setWords(ocrResult.words);
                                     }}
                                     disabled={isAnalyzing}
                                     className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-all duration-200 disabled:opacity-50"

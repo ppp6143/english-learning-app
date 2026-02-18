@@ -2,11 +2,11 @@
 
 import { useCallback, useState } from 'react';
 import { createWorker, Worker, PSM } from 'tesseract.js';
-import { OcrWord } from '@/src/lib/types';
+import { OcrWord, OcrResult } from '@/src/lib/types';
 import { CEFRLevel, getWordLevelAsync, getRelativeDifficulty } from '@/src/lib/wordLevels';
 
 interface UseOcrResult {
-    analyze: (imageUrl: string, userLevel: CEFRLevel) => Promise<OcrWord[]>;
+    analyze: (imageUrl: string, userLevel: CEFRLevel) => Promise<OcrResult>;
     isAnalyzing: boolean;
     progress: number;
     error: string | null;
@@ -18,7 +18,7 @@ export function useOcr(): UseOcrResult {
     const [error, setError] = useState<string | null>(null);
 
     const analyze = useCallback(
-        async (imageUrl: string, userLevel: CEFRLevel): Promise<OcrWord[]> => {
+        async (imageUrl: string, userLevel: CEFRLevel): Promise<OcrResult> => {
             setIsAnalyzing(true);
             setProgress(0);
             setError(null);
@@ -39,9 +39,15 @@ export function useOcr(): UseOcrResult {
                     tessedit_pageseg_mode: PSM.AUTO_OSD,
                 });
 
-                const result = await worker.recognize(imageUrl);
+                const result = await worker.recognize(imageUrl, { rotateAuto: true });
 
-                // Pre-process raw OCR words
+                // Extract rotation radians applied by Tesseract
+                const rotateRadians: number | null =
+                    typeof result.data.rotateRadians === 'number'
+                        ? result.data.rotateRadians
+                        : null;
+
+                // Pre-process raw OCR words with baseline angle extraction
                 const rawWords = result.data.words
                     .filter((w) => w.text.trim().length > 0)
                     .map((w) => {
@@ -49,7 +55,16 @@ export function useOcr(): UseOcrResult {
                             .replace(/^[^a-zA-Z]+/, '')
                             .replace(/[^a-zA-Z]+$/, '')
                             .replace(/[^a-zA-Z'-]/g, '');
-                        return { text, bbox: w.bbox, confidence: w.confidence };
+
+                        // Calculate angle from baseline if available
+                        let angle = 0;
+                        const bl = w.baseline;
+                        if (bl && bl.has_baseline) {
+                            const rad = Math.atan2(bl.y1 - bl.y0, bl.x1 - bl.x0);
+                            angle = (rad * 180) / Math.PI;
+                        }
+
+                        return { text, bbox: w.bbox, confidence: w.confidence, angle };
                     })
                     .filter((w) => w.text.length > 0);
 
@@ -82,16 +97,17 @@ export function useOcr(): UseOcrResult {
                             level,
                             difficulty,
                             context,
+                            angle: w.angle,
                         };
                     })
                 );
 
                 setProgress(100);
-                return words;
+                return { words, rotateRadians };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : 'OCR analysis failed';
                 setError(msg);
-                return [];
+                return { words: [], rotateRadians: null };
             } finally {
                 if (worker) {
                     await worker.terminate();
