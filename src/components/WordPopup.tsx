@@ -107,6 +107,11 @@ export default function WordPopup({ word, anchorRect, onClose, translationCache 
     const top = anchorRect.bottom + 8;
     const left = Math.max(140, Math.min(anchorRect.left + anchorRect.width / 2, window.innerWidth - 140));
 
+    // Dynamic sizing based on highlight height
+    // Clamp between 13px and 32px to ensure readability but respect scale
+    const baseFontSize = Math.max(13, Math.min(32, anchorRect.height * 0.9));
+    const titleFontSize = Math.max(14, Math.min(36, anchorRect.height * 1.0));
+
     return (
         <div
             ref={popupRef}
@@ -121,7 +126,7 @@ export default function WordPopup({ word, anchorRect, onClose, translationCache 
                     {/* Header: Word + Level */}
                     <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                            <p className="text-lg font-bold text-white tracking-wide">{word.text}</p>
+                            <p className="font-bold text-white tracking-wide" style={{ fontSize: titleFontSize }}>{word.text}</p>
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -130,10 +135,11 @@ export default function WordPopup({ word, anchorRect, onClose, translationCache 
                                     window.speechSynthesis.cancel();
                                     window.speechSynthesis.speak(u);
                                 }}
-                                className="w-6 h-6 flex items-center justify-center rounded-full bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white transition-all"
+                                className="flex items-center justify-center rounded-full bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white transition-all"
+                                style={{ width: titleFontSize * 1.4, height: titleFontSize * 1.4 }}
                                 title="Play pronunciation"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg xmlns="http://www.w3.org/2000/svg" width={titleFontSize * 0.7} height={titleFontSize * 0.7} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                                     <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
                                     <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
@@ -153,13 +159,17 @@ export default function WordPopup({ word, anchorRect, onClose, translationCache 
                     <div className="py-2.5 border-t border-gray-800">
                         {displayPrimary ? (
                             <>
-                                <p className="text-xl font-bold text-amber-300 leading-snug">
+                                <p className="font-bold text-amber-300 leading-snug" style={{ fontSize: baseFontSize }}>
                                     {displayPrimary}
                                 </p>
                                 {displayAlts.length > 0 && (
-                                    <p className="text-sm text-amber-200/50 mt-1">
-                                        {displayAlts.join('、')}
-                                    </p>
+                                    <div className="mt-2 space-y-1">
+                                        {displayAlts.map((alt, i) => (
+                                            <p key={i} className="text-gray-400" style={{ fontSize: baseFontSize * 0.85 }}>
+                                                {alt}
+                                            </p>
+                                        ))}
+                                    </div>
                                 )}
                             </>
                         ) : jaLoading ? (
