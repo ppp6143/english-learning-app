@@ -182,7 +182,7 @@ export default function WordPopup({
                 width: calculatedWidth,
                 transformOrigin: 'bottom left',
                 // Translate to Bottom-Left of Visual Viewport, Scale Down, Move Up by Height (100%)
-                transform: `translate(${vvLeft}px, ${vvBottom}px) scale(${scaleFactor}) translateY(-100%)`,
+                transform: `translate(${vvLeft}px, ${vvBottom}px) translateY(-100%) scale(${scaleFactor})`,
                 pointerEvents: 'auto',
                 opacity: 1, // Ready
             };
@@ -193,11 +193,22 @@ export default function WordPopup({
 
     } else {
         // Floating Mode
-        // We adjust the top margin to be visually consistent (8px visual).
-        // Layout distance = 8 / scale.
         const top = anchorRect.bottom + (8 / currentScale);
-        const left = Math.max(140, Math.min(anchorRect.left + anchorRect.width / 2, window.innerWidth - 140));
         const scaleFactor = 1 / currentScale;
+
+        // Clamp horizontal position within visual viewport bounds (not layout viewport)
+        // so the popup stays on-screen when pinch-zoomed on mobile
+        const popupMaxHalfWidth = 140 / currentScale;
+        let clampLeft: number, clampRight: number;
+        if (viewport) {
+            clampLeft = viewport.offsetLeft + popupMaxHalfWidth;
+            clampRight = viewport.offsetLeft + viewport.width - popupMaxHalfWidth;
+        } else {
+            clampLeft = 140;
+            clampRight = window.innerWidth - 140;
+        }
+        const wordCenter = anchorRect.left + anchorRect.width / 2;
+        const left = Math.max(clampLeft, Math.min(wordCenter, clampRight));
 
         overlayClass = "fixed z-50 pointer-events-none";
 
@@ -209,12 +220,15 @@ export default function WordPopup({
             transform: `translate(-50%, 0) scale(${scaleFactor})`,
             maxWidth: '90vw',
             pointerEvents: 'auto',
-            // Hide until ready if zoomed to prevent flash
             opacity: isReady ? 1 : 0,
+            transition: 'opacity 150ms ease-out',
         };
     }
 
-    const animationClass = isReady ? "animate-in fade-in duration-200" : "";
+    // Don't use CSS animation classes (animate-in/fade-in) — their keyframes
+    // override the inline transform with scale(1), causing a flash of the
+    // full-size popup before the 1/scale correction is applied.
+    const animationClass = "";
 
     return (
         <div className={overlayClass}>
