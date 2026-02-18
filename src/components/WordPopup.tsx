@@ -110,22 +110,22 @@ export default function WordPopup({
     const levelDesc = level ? getLevelDescription(level) : null;
 
     // Visual Viewport Logic for Native Zoom stability
-    const [viewport, setViewport] = useState({ scale: 1, offsetLeft: 0, offsetTop: 0, width: 0, height: 0 });
+    const [viewport, setViewport] = useState<{ scale: number; offsetLeft: number; offsetTop: number; width: number; height: number } | null>(null);
 
     useEffect(() => {
         const handler = () => {
             if (!window.visualViewport) return;
             setViewport({
                 scale: window.visualViewport.scale,
-                offsetLeft: window.visualViewport.offsetLeft,
-                offsetTop: window.visualViewport.offsetTop,
+                offsetLeft: window.visualViewport.offsetLeft, // or pageLeft
+                offsetTop: window.visualViewport.offsetTop,   // or pageTop
                 width: window.visualViewport.width,
                 height: window.visualViewport.height
             });
         };
 
         if (typeof window !== 'undefined' && window.visualViewport) {
-            handler(); // initial
+            handler();
             window.visualViewport.addEventListener('resize', handler);
             window.visualViewport.addEventListener('scroll', handler);
         }
@@ -147,7 +147,6 @@ export default function WordPopup({
 
     if (scaleMode === 'dynamic') {
         const h = anchorRect.height || 20;
-        // Cap dynamic size aggressively.
         baseFontSize = Math.max(12, Math.min(18, h * 0.8));
         titleFontSize = Math.max(14, Math.min(22, h * 0.9));
     } else {
@@ -158,45 +157,64 @@ export default function WordPopup({
     // Styles
     let popupStyle: React.CSSProperties = {};
     let overlayClass = "";
+    const isReady = !!viewport;
+    const currentScale = viewport?.scale || 1;
 
     if (isBottom) {
         // Bottom Fixed Mode: Use a full-screen wrapper and position absolutely to Visual Viewport
         overlayClass = "fixed inset-0 z-50 pointer-events-none overflow-hidden";
 
-        // Calculate transform to stick to visual viewport bottom
-        const vvBottom = viewport.offsetTop + viewport.height;
-        const vvLeft = viewport.offsetLeft;
-        const scale = 1 / viewport.scale;
+        if (isReady && viewport) {
+            const vvBottom = viewport.offsetTop + viewport.height;
+            const vvLeft = viewport.offsetLeft;
+            const scaleFactor = 1 / viewport.scale;
 
-        popupStyle = {
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: viewport.width, // Match visual width
-            transformOrigin: 'bottom left',
-            transform: `translate(${vvLeft}px, ${vvBottom}px) scale(${scale}) translateY(-100%)`,
-            pointerEvents: 'auto',
-        };
+            // Width: content must be (viewport.width * viewport.scale) so that when scaled down by (1/scale), it equals viewport.width
+            // Wait: 
+            // Calculated Width * (1/scale) = Viewport Width
+            // Calculated Width = Viewport Width * scale
+            const calculatedWidth = viewport.width * viewport.scale;
+
+            popupStyle = {
+                position: 'absolute',
+                left: 0,
+                top: 0, // We use transform translate to move it
+                width: calculatedWidth,
+                transformOrigin: 'bottom left',
+                // Translate to Bottom-Left of Visual Viewport, Scale Down, Move Up by Height (100%)
+                transform: `translate(${vvLeft}px, ${vvBottom}px) scale(${scaleFactor}) translateY(-100%)`,
+                pointerEvents: 'auto',
+                opacity: 1, // Ready
+            };
+        } else {
+            // Not ready or server side
+            popupStyle = { opacity: 0 };
+        }
+
     } else {
         // Floating Mode
-        const top = anchorRect.bottom + 8;
+        // We adjust the top margin to be visually consistent (8px visual).
+        // Layout distance = 8 / scale.
+        const top = anchorRect.bottom + (8 / currentScale);
         const left = Math.max(140, Math.min(anchorRect.left + anchorRect.width / 2, window.innerWidth - 140));
-        const scale = 1 / viewport.scale;
+        const scaleFactor = 1 / currentScale;
 
-        overlayClass = "fixed z-50 pointer-events-none"; // Wrapper just in case
+        overlayClass = "fixed z-50 pointer-events-none";
 
         popupStyle = {
             position: 'fixed',
             top,
             left,
             transformOrigin: 'top center',
-            transform: `translate(-50%, 0) scale(${scale})`,
+            transform: `translate(-50%, 0) scale(${scaleFactor})`,
             maxWidth: '90vw',
             pointerEvents: 'auto',
+            // Hide until ready if zoomed to prevent flash
+            opacity: isReady ? 1 : 0,
         };
     }
 
-    const animationClass = "animate-in fade-in duration-200";
+    const animationClass = isReady ? "animate-in fade-in duration-200" : "";
 
     return (
         <div className={overlayClass}>
