@@ -125,9 +125,11 @@ export default function WordPopup({
     let titleFontSize = 18;
 
     if (scaleMode === 'dynamic') {
-        const h = anchorRect.height || 20; // fallback if 0
-        baseFontSize = Math.max(13, Math.min(32, h * 0.9));
-        titleFontSize = Math.max(14, Math.min(36, h * 1.0));
+        const h = anchorRect.height || 20;
+        // Cap dynamic size aggressively. Browser zoom handles the rest.
+        // We only want to scale DOWN for very small text, but not UP endlessly.
+        baseFontSize = Math.max(12, Math.min(18, h * 0.8)); // Max 18px
+        titleFontSize = Math.max(14, Math.min(22, h * 0.9)); // Max 22px
     } else {
         // Fixed Mode
         baseFontSize = 16;
@@ -148,14 +150,15 @@ export default function WordPopup({
                 left,
                 bottom,
                 transform,
-                // Only set width constraints if floating
+                // Ensure it fits in viewport width even when zoomed
+                maxWidth: isBottom ? '100%' : '90vw',
                 minWidth: isBottom ? '100%' : undefined
             }}
         >
             <div
                 className={`
                     relative bg-gray-900 border-gray-700 shadow-2xl shadow-black/80 p-4
-                    ${isBottom ? 'border-t rounded-t-2xl pb-8' : 'border rounded-xl min-w-[180px] max-w-[280px]'}
+                    ${isBottom ? 'border-t rounded-t-2xl pb-8' : 'border rounded-xl min-w-[120px] max-w-[280px]'}
                 `}
             >
                 {/* Arrow (only for floating) */}
