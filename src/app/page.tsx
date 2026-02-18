@@ -5,6 +5,7 @@ import ImageUploader from '@/src/components/ImageUploader';
 import HighlightOverlay from '@/src/components/HighlightOverlay';
 import WordPopup from '@/src/components/WordPopup';
 import UISettings, { PopupScaleMode, PopupPositionMode } from '@/src/components/UISettings';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { useOcr } from '@/src/components/OcrAnalyzer';
 import {
     CEFRLevel,
@@ -238,29 +239,40 @@ export default function Home() {
                         {/* Image container */}
                         <div
                             ref={containerRef}
-                            className="relative inline-block rounded-xl overflow-hidden border border-gray-800 shadow-2xl shadow-black/40"
+                            className="relative inline-block rounded-xl overflow-hidden border border-gray-800 shadow-2xl shadow-black/40 bg-gray-900"
                         >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                                ref={imageRef}
-                                src={imageDataUrl}
-                                alt="Uploaded text"
-                                onLoad={handleImageLoad}
-                                className="block max-w-full h-auto"
-                                style={{ maxHeight: '70vh' }}
-                            />
+                            <TransformWrapper
+                                initialScale={1}
+                                minScale={1}
+                                maxScale={8}
+                                centerOnInit={false}
+                                wheel={{ step: 0.1 }}
+                                limitToBounds={true}
+                            >
+                                <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        ref={imageRef}
+                                        src={imageDataUrl}
+                                        alt="Uploaded text"
+                                        onLoad={handleImageLoad}
+                                        className="block max-w-full h-auto"
+                                        style={{ maxHeight: '70vh' }}
+                                    />
 
-                            {/* Highlight overlay */}
-                            {words.length > 0 && imageDisplaySize.width > 0 && (
-                                <HighlightOverlay
-                                    words={words}
-                                    imageWidth={imageNaturalSize.width}
-                                    imageHeight={imageNaturalSize.height}
-                                    displayWidth={imageDisplaySize.width}
-                                    displayHeight={imageDisplaySize.height}
-                                    onWordClick={handleWordClick}
-                                />
-                            )}
+                                    {/* Highlight overlay */}
+                                    {words.length > 0 && imageDisplaySize.width > 0 && (
+                                        <HighlightOverlay
+                                            words={words}
+                                            imageWidth={imageNaturalSize.width}
+                                            imageHeight={imageNaturalSize.height}
+                                            displayWidth={imageDisplaySize.width}
+                                            displayHeight={imageDisplaySize.height}
+                                            onWordClick={handleWordClick}
+                                        />
+                                    )}
+                                </TransformComponent>
+                            </TransformWrapper>
                         </div>
 
                         {/* Actions */}
