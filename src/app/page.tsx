@@ -4,6 +4,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import ImageUploader from '@/src/components/ImageUploader';
 import HighlightOverlay from '@/src/components/HighlightOverlay';
 import WordPopup from '@/src/components/WordPopup';
+import UISettings, { PopupScaleMode, PopupPositionMode } from '@/src/components/UISettings';
 import { useOcr } from '@/src/components/OcrAnalyzer';
 import {
     CEFRLevel,
@@ -13,7 +14,7 @@ import {
     getHighlightStyle,
 } from '@/src/lib/wordLevels';
 import { OcrWord } from '@/src/lib/types';
-import { prefetchTranslations, clearTranslationCache } from '@/src/lib/translationCache';
+import { prefetchTranslations, clearTranslationCache, translateSingleWord } from '@/src/lib/translationCache';
 
 export default function Home() {
     // User's current CEFR level
@@ -33,6 +34,10 @@ export default function Home() {
     // Translation cache state
     const [translationCache, setTranslationCache] = useState<Record<string, string>>({});
     const [isTranslating, setIsTranslating] = useState(false);
+
+    // UI Settings State
+    const [popupScaleMode, setPopupScaleMode] = useState<PopupScaleMode>('dynamic');
+    const [popupPositionMode, setPopupPositionMode] = useState<PopupPositionMode>('near');
 
     // Popup state
     const [selectedWord, setSelectedWord] = useState<OcrWord | null>(null);
@@ -307,14 +312,24 @@ export default function Home() {
             </div>
 
             {/* Word popup */}
-            {selectedWord && popupAnchor && (
+            {selectedWord && (popupAnchor || popupPositionMode === 'bottom') && (
                 <WordPopup
                     word={selectedWord}
-                    anchorRect={popupAnchor}
+                    anchorRect={popupAnchor || new DOMRect()} // Anchor not needed for bottom mode
                     onClose={() => setSelectedWord(null)}
                     translationCache={translationCache}
+                    scaleMode={popupScaleMode}
+                    positionMode={popupPositionMode}
                 />
             )}
+
+            {/* UI Settings Toggle */}
+            <UISettings
+                scaleMode={popupScaleMode}
+                onScaleChange={setPopupScaleMode}
+                positionMode={popupPositionMode}
+                onPositionChange={setPopupPositionMode}
+            />
         </main>
     );
 }

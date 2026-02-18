@@ -4,15 +4,25 @@ import React, { useEffect, useRef, useState } from 'react';
 import { OcrWord } from '@/src/lib/types';
 import { getHighlightStyle, getWordLevel, getLevelDescription } from '@/src/lib/wordLevels';
 import { translateSingleWord } from '@/src/lib/translationCache';
+import { PopupScaleMode, PopupPositionMode } from './UISettings';
 
 interface WordPopupProps {
     word: OcrWord;
     anchorRect: DOMRect;
     onClose: () => void;
     translationCache: Record<string, string>;
+    scaleMode?: PopupScaleMode;
+    positionMode?: PopupPositionMode;
 }
 
-export default function WordPopup({ word, anchorRect, onClose, translationCache }: WordPopupProps) {
+export default function WordPopup({
+    word,
+    anchorRect,
+    onClose,
+    translationCache,
+    scaleMode = 'dynamic',
+    positionMode = 'near'
+}: WordPopupProps) {
     const popupRef = useRef<HTMLDivElement>(null);
     const [onDemandJa, setOnDemandJa] = useState<{ primary: string; alternatives?: string[] } | null>(null);
     const [jaLoading, setJaLoading] = useState(false);
@@ -69,9 +79,6 @@ export default function WordPopup({ word, anchorRect, onClose, translationCache 
             .replace(/[,，、]+/g, '、')
             .replace(/^[、\s]+|[、\s]+$/g, '')
             .trim();
-
-        // If the result is empty (e.g. only had grammar tags), fallback or keep empty?
-        // Usually definitions have some content.
         return cleaned;
     };
 
@@ -104,29 +111,63 @@ export default function WordPopup({ word, anchorRect, onClose, translationCache 
     const level = getWordLevel(word.text);
     const levelDesc = level ? getLevelDescription(level) : null;
 
-    const top = anchorRect.bottom + 8;
-    const left = Math.max(140, Math.min(anchorRect.left + anchorRect.width / 2, window.innerWidth - 140));
+    // Layout Logic
+    const isBottom = positionMode === 'bottom';
 
-    // Dynamic sizing based on highlight height
-    // Clamp between 13px and 32px to ensure readability but respect scale
-    const baseFontSize = Math.max(13, Math.min(32, anchorRect.height * 0.9));
-    const titleFontSize = Math.max(14, Math.min(36, anchorRect.height * 1.0));
+    // Positioning
+    const top = isBottom ? undefined : anchorRect.bottom + 8;
+    const left = isBottom ? undefined : Math.max(140, Math.min(anchorRect.left + anchorRect.width / 2, window.innerWidth - 140));
+    const transform = isBottom ? 'none' : 'translateX(-50%)';
+    const bottom = isBottom ? 0 : undefined;
+
+    // Sizing
+    let baseFontSize = 16;
+    let titleFontSize = 18;
+
+    if (scaleMode === 'dynamic') {
+        const h = anchorRect.height || 20; // fallback if 0
+        baseFontSize = Math.max(13, Math.min(32, h * 0.9));
+        titleFontSize = Math.max(14, Math.min(36, h * 1.0));
+    } else {
+        // Fixed Mode
+        baseFontSize = 16;
+        titleFontSize = 20;
+    }
+
+    // Animation class
+    const animationClass = isBottom
+        ? "animate-in fade-in slide-in-from-bottom-4 duration-300"
+        : "animate-in fade-in slide-in-from-top-2 duration-200";
 
     return (
         <div
             ref={popupRef}
-            className="fixed z-50 animate-in fade-in slide-in-from-top-2 duration-200"
-            style={{ top, left, transform: 'translateX(-50%)' }}
+            className={`fixed z-50 ${animationClass} ${isBottom ? 'left-0 right-0 w-full' : ''}`}
+            style={{
+                top,
+                left,
+                bottom,
+                transform,
+                // Only set width constraints if floating
+                minWidth: isBottom ? '100%' : undefined
+            }}
         >
-            <div className="relative bg-gray-900 border border-gray-700 rounded-xl shadow-2xl shadow-black/60 p-3.5 min-w-[180px] max-w-[280px]">
-                {/* Arrow */}
-                <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-4 h-4 rotate-45 bg-gray-900 border-l border-t border-gray-700" />
+            <div
+                className={`
+                    relative bg-gray-900 border-gray-700 shadow-2xl shadow-black/80 p-4
+                    ${isBottom ? 'border-t rounded-t-2xl pb-8' : 'border rounded-xl min-w-[180px] max-w-[280px]'}
+                `}
+            >
+                {/* Arrow (only for floating) */}
+                {!isBottom && (
+                    <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-4 h-4 rotate-45 bg-gray-900 border-l border-t border-gray-700" />
+                )}
 
-                <div className="relative z-10">
+                <div className="relative z-10 flex flex-col gap-2">
                     {/* Header: Word + Level */}
-                    <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                            <p className="font-bold text-white tracking-wide" style={{ fontSize: titleFontSize }}>{word.text}</p>
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <p className="font-bold text-white tracking-wide leading-none" style={{ fontSize: titleFontSize }}>{word.text}</p>
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -181,9 +222,6 @@ export default function WordPopup({ word, anchorRect, onClose, translationCache 
                             <p className="text-sm text-gray-600">—</p>
                         )}
                     </div>
-
-                    {/* Context (if available) */}
-
 
                     {/* Footer */}
                     <div className="pt-2 border-t border-gray-800 flex items-center justify-between">
