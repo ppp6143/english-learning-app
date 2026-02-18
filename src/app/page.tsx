@@ -241,38 +241,27 @@ export default function Home() {
                             ref={containerRef}
                             className="relative inline-block rounded-xl overflow-hidden border border-gray-800 shadow-2xl shadow-black/40 bg-gray-900"
                         >
-                            <TransformWrapper
-                                initialScale={1}
-                                minScale={1}
-                                maxScale={8}
-                                centerOnInit={false}
-                                wheel={{ step: 0.1 }}
-                                limitToBounds={true}
-                            >
-                                <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full">
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                        ref={imageRef}
-                                        src={imageDataUrl}
-                                        alt="Uploaded text"
-                                        onLoad={handleImageLoad}
-                                        className="block max-w-full h-auto"
-                                        style={{ maxHeight: '70vh' }}
-                                    />
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                ref={imageRef}
+                                src={imageDataUrl}
+                                alt="Uploaded text"
+                                onLoad={handleImageLoad}
+                                className="block max-w-full h-auto"
+                                style={{ maxHeight: '70vh' }}
+                            />
 
-                                    {/* Highlight overlay */}
-                                    {words.length > 0 && imageDisplaySize.width > 0 && (
-                                        <HighlightOverlay
-                                            words={words}
-                                            imageWidth={imageNaturalSize.width}
-                                            imageHeight={imageNaturalSize.height}
-                                            displayWidth={imageDisplaySize.width}
-                                            displayHeight={imageDisplaySize.height}
-                                            onWordClick={handleWordClick}
-                                        />
-                                    )}
-                                </TransformComponent>
-                            </TransformWrapper>
+                            {/* Highlight overlay */}
+                            {words.length > 0 && imageDisplaySize.width > 0 && (
+                                <HighlightOverlay
+                                    words={words}
+                                    imageWidth={imageNaturalSize.width}
+                                    imageHeight={imageNaturalSize.height}
+                                    displayWidth={imageDisplaySize.width}
+                                    displayHeight={imageDisplaySize.height}
+                                    onWordClick={handleWordClick}
+                                />
+                            )}
                         </div>
 
                         {/* Actions */}

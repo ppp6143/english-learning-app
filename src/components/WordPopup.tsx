@@ -69,13 +69,9 @@ export default function WordPopup({
     const cleanDef = (text: string | null) => {
         if (!text) return null;
         let cleaned = text
-            // Remove context/grammar/preposition info in various brackets
             .replace(/[《〈〔（\(][^《〈〔（\(》〉〕）\)]*[》〉〕）\)]/g, '')
-            // Remove [ ... ]
             .replace(/[\[].*?[\]]/g, '')
-            // Remove 『』 brackets but keep content
             .replace(/[『』]/g, '')
-            // Unify separators and cleanup
             .replace(/[,，、]+/g, '、')
             .replace(/^[、\s]+|[、\s]+$/g, '')
             .trim();
@@ -89,11 +85,13 @@ export default function WordPopup({
     const displayAlts = rawAlts
         .map(cleanDef)
         .filter((s): s is string => !!s && s.length > 0)
-        .slice(0, 3); // Limit relative alternatives for simpler UI
+        .slice(0, 3);
 
     // Close handlers
     useEffect(() => {
         const handleClick = (e: MouseEvent) => {
+            // Note: with visualViewport scaling, checking contains might be tricky if events bubble differently
+            // But usually contains() works on DOM tree.
             if (popupRef.current && !popupRef.current.contains(e.target as Node)) onClose();
         };
         const handleKey = (e: KeyboardEvent) => {
@@ -111,127 +109,180 @@ export default function WordPopup({
     const level = getWordLevel(word.text);
     const levelDesc = level ? getLevelDescription(level) : null;
 
+    // Visual Viewport Logic for Native Zoom stability
+    const [viewport, setViewport] = useState({ scale: 1, offsetLeft: 0, offsetTop: 0, width: 0, height: 0 });
+
+    useEffect(() => {
+        const handler = () => {
+            if (!window.visualViewport) return;
+            setViewport({
+                scale: window.visualViewport.scale,
+                offsetLeft: window.visualViewport.offsetLeft,
+                offsetTop: window.visualViewport.offsetTop,
+                width: window.visualViewport.width,
+                height: window.visualViewport.height
+            });
+        };
+
+        if (typeof window !== 'undefined' && window.visualViewport) {
+            handler(); // initial
+            window.visualViewport.addEventListener('resize', handler);
+            window.visualViewport.addEventListener('scroll', handler);
+        }
+
+        return () => {
+            if (typeof window !== 'undefined' && window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', handler);
+                window.visualViewport.removeEventListener('scroll', handler);
+            }
+        };
+    }, []);
+
     // Layout Logic
     const isBottom = positionMode === 'bottom';
 
-    // Positioning
-    const top = isBottom ? undefined : anchorRect.bottom + 8;
-    const left = isBottom ? undefined : Math.max(140, Math.min(anchorRect.left + anchorRect.width / 2, window.innerWidth - 140));
-    const transform = isBottom ? 'none' : 'translateX(-50%)';
-    const bottom = isBottom ? 0 : undefined;
-
-    // Sizing
+    // Sizing (Base font size logic matching native zoom)
     let baseFontSize = 16;
     let titleFontSize = 18;
 
     if (scaleMode === 'dynamic') {
         const h = anchorRect.height || 20;
-        // Cap dynamic size aggressively. Browser zoom handles the rest.
-        // We only want to scale DOWN for very small text, but not UP endlessly.
-        baseFontSize = Math.max(12, Math.min(18, h * 0.8)); // Max 18px
-        titleFontSize = Math.max(14, Math.min(22, h * 0.9)); // Max 22px
+        // Cap dynamic size aggressively.
+        baseFontSize = Math.max(12, Math.min(18, h * 0.8));
+        titleFontSize = Math.max(14, Math.min(22, h * 0.9));
     } else {
-        // Fixed Mode
         baseFontSize = 16;
         titleFontSize = 20;
     }
 
-    // Animation class
-    const animationClass = isBottom
-        ? "animate-in fade-in slide-in-from-bottom-4 duration-300"
-        : "animate-in fade-in slide-in-from-top-2 duration-200";
+    // Styles
+    let popupStyle: React.CSSProperties = {};
+    let overlayClass = "";
+
+    if (isBottom) {
+        // Bottom Fixed Mode: Use a full-screen wrapper and position absolutely to Visual Viewport
+        overlayClass = "fixed inset-0 z-50 pointer-events-none overflow-hidden";
+
+        // Calculate transform to stick to visual viewport bottom
+        const vvBottom = viewport.offsetTop + viewport.height;
+        const vvLeft = viewport.offsetLeft;
+        const scale = 1 / viewport.scale;
+
+        popupStyle = {
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: viewport.width, // Match visual width
+            transformOrigin: 'bottom left',
+            transform: `translate(${vvLeft}px, ${vvBottom}px) scale(${scale}) translateY(-100%)`,
+            pointerEvents: 'auto',
+        };
+    } else {
+        // Floating Mode
+        const top = anchorRect.bottom + 8;
+        const left = Math.max(140, Math.min(anchorRect.left + anchorRect.width / 2, window.innerWidth - 140));
+        const scale = 1 / viewport.scale;
+
+        overlayClass = "fixed z-50 pointer-events-none"; // Wrapper just in case
+
+        popupStyle = {
+            position: 'fixed',
+            top,
+            left,
+            transformOrigin: 'top center',
+            transform: `translate(-50%, 0) scale(${scale})`,
+            maxWidth: '90vw',
+            pointerEvents: 'auto',
+        };
+    }
+
+    const animationClass = "animate-in fade-in duration-200";
 
     return (
-        <div
-            ref={popupRef}
-            className={`fixed z-50 ${animationClass} ${isBottom ? 'left-0 right-0 w-full' : ''}`}
-            style={{
-                top,
-                left,
-                bottom,
-                transform,
-                // Ensure it fits in viewport width even when zoomed
-                maxWidth: isBottom ? '100%' : '90vw',
-                minWidth: isBottom ? '100%' : undefined
-            }}
-        >
+        <div className={overlayClass}>
             <div
-                className={`
-                    relative bg-gray-900 border-gray-700 shadow-2xl shadow-black/80 p-4
-                    ${isBottom ? 'border-t rounded-t-2xl pb-8' : 'border rounded-xl min-w-[120px] max-w-[280px]'}
-                `}
+                ref={popupRef}
+                className={animationClass}
+                style={popupStyle}
             >
-                {/* Arrow (only for floating) */}
-                {!isBottom && (
-                    <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-4 h-4 rotate-45 bg-gray-900 border-l border-t border-gray-700" />
-                )}
+                <div
+                    className={`
+                        relative bg-gray-900 border-gray-700 shadow-2xl shadow-black/80 p-4 pointer-events-auto
+                        ${isBottom ? 'border-t rounded-t-2xl pb-8' : 'border rounded-xl min-w-[120px] max-w-[280px]'}
+                    `}
+                >
+                    {/* Arrow (only for floating) */}
+                    {!isBottom && (
+                        <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-4 h-4 rotate-45 bg-gray-900 border-l border-t border-gray-700" />
+                    )}
 
-                <div className="relative z-10 flex flex-col gap-2">
-                    {/* Header: Word + Level */}
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <p className="font-bold text-white tracking-wide leading-none" style={{ fontSize: titleFontSize }}>{word.text}</p>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    const u = new SpeechSynthesisUtterance(word.text);
-                                    u.lang = 'en-US';
-                                    window.speechSynthesis.cancel();
-                                    window.speechSynthesis.speak(u);
-                                }}
-                                className="flex items-center justify-center rounded-full bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white transition-all"
-                                style={{ width: titleFontSize * 1.4, height: titleFontSize * 1.4 }}
-                                title="Play pronunciation"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" width={titleFontSize * 0.7} height={titleFontSize * 0.7} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-                                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                                </svg>
-                            </button>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                            <span
-                                className="inline-block w-2.5 h-2.5 rounded-full"
-                                style={{ backgroundColor: style.bgColor.replace(/[\d.]+\)$/, '1)') }}
-                            />
-                            <span className="text-[11px] text-gray-400">{level ?? '—'}</span>
-                        </div>
-                    </div>
-
-                    {/* Hero: Japanese Translation */}
-                    <div className="py-2.5 border-t border-gray-800">
-                        {displayPrimary ? (
-                            <>
-                                <p className="font-bold text-amber-300 leading-snug" style={{ fontSize: baseFontSize }}>
-                                    {displayPrimary}
-                                </p>
-                                {displayAlts.length > 0 && (
-                                    <div className="mt-2 space-y-1">
-                                        {displayAlts.map((alt, i) => (
-                                            <p key={i} className="text-gray-400" style={{ fontSize: baseFontSize * 0.85 }}>
-                                                {alt}
-                                            </p>
-                                        ))}
-                                    </div>
-                                )}
-                            </>
-                        ) : jaLoading ? (
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                                <span className="text-sm text-gray-500">翻訳中...</span>
+                    <div className="relative z-10 flex flex-col gap-2">
+                        {/* Header: Word + Level */}
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <p className="font-bold text-white tracking-wide leading-none" style={{ fontSize: titleFontSize }}>{word.text}</p>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        const u = new SpeechSynthesisUtterance(word.text);
+                                        u.lang = 'en-US';
+                                        window.speechSynthesis.cancel();
+                                        window.speechSynthesis.speak(u);
+                                    }}
+                                    className="flex items-center justify-center rounded-full bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white transition-all"
+                                    style={{ width: titleFontSize * 1.4, height: titleFontSize * 1.4 }}
+                                    title="Play pronunciation"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width={titleFontSize * 0.7} height={titleFontSize * 0.7} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                                    </svg>
+                                </button>
                             </div>
-                        ) : (
-                            <p className="text-sm text-gray-600">—</p>
-                        )}
-                    </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                <span
+                                    className="inline-block w-2.5 h-2.5 rounded-full"
+                                    style={{ backgroundColor: style.bgColor.replace(/[\d.]+\)$/, '1)') }}
+                                />
+                                <span className="text-[11px] text-gray-400">{level ?? '—'}</span>
+                            </div>
+                        </div>
 
-                    {/* Footer */}
-                    <div className="pt-2 border-t border-gray-800 flex items-center justify-between">
-                        <span className="text-[10px] text-gray-600">
-                            {level ?? '—'}{levelDesc ? ` · ${levelDesc}` : ''}
-                        </span>
-                        <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">✕</button>
+                        {/* Hero: Japanese Translation */}
+                        <div className="py-2.5 border-t border-gray-800">
+                            {displayPrimary ? (
+                                <>
+                                    <p className="font-bold text-amber-300 leading-snug" style={{ fontSize: baseFontSize }}>
+                                        {displayPrimary}
+                                    </p>
+                                    {displayAlts.length > 0 && (
+                                        <div className="mt-2 space-y-1">
+                                            {displayAlts.map((alt, i) => (
+                                                <p key={i} className="text-gray-400" style={{ fontSize: baseFontSize * 0.85 }}>
+                                                    {alt}
+                                                </p>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            ) : jaLoading ? (
+                                <div className="flex items-center gap-2">
+                                    <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                                    <span className="text-sm text-gray-500">翻訳中...</span>
+                                </div>
+                            ) : (
+                                <p className="text-sm text-gray-600">—</p>
+                            )}
+                        </div>
+
+                        {/* Footer */}
+                        <div className="pt-2 border-t border-gray-800 flex items-center justify-between">
+                            <span className="text-[10px] text-gray-600">
+                                {level ?? '—'}{levelDesc ? ` · ${levelDesc}` : ''}
+                            </span>
+                            <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">✕</button>
+                        </div>
                     </div>
                 </div>
             </div>
