@@ -80,38 +80,25 @@ export default function Home() {
         return () => window.removeEventListener('resize', updateDisplaySize);
     }, [updateDisplaySize]);
 
-    // Handle image selection
+    // Handle image selection (no OCR yet — user can rotate first)
     const handleImageSelected = useCallback(
-        async (_file: File, dataUrl: string) => {
+        (_file: File, dataUrl: string) => {
             setImageDataUrl(dataUrl);
             setWords([]);
             setSelectedWord(null);
             clearTranslationCache();
             setTranslationCache({});
 
-            // Wait for image to load to get natural dimensions
             const img = new Image();
-            img.onload = async () => {
+            img.onload = () => {
                 setImageNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
-
-                // Start OCR automatically
-                const ocrResult = await analyze(dataUrl, userLevel);
-                setWords(ocrResult.words);
-
-                // Pre-fetch translations in background
-                setIsTranslating(true);
-                await prefetchTranslations(
-                    ocrResult.words.map(w => ({ text: w.text, context: w.context })),
-                    (updatedCache) => setTranslationCache({ ...updatedCache })
-                );
-                setIsTranslating(false);
             };
             img.src = dataUrl;
         },
-        [analyze, userLevel]
+        []
     );
 
-    // Handle manual 90° rotation
+    // Handle manual 90° rotation (image only, no OCR)
     const handleRotate = useCallback(async () => {
         if (!imageDataUrl || isAnalyzing) return;
         try {
@@ -120,20 +107,28 @@ export default function Home() {
             setImageNaturalSize({ width: rotated.width, height: rotated.height });
             setWords([]);
             setSelectedWord(null);
-
-            // Re-run OCR on the rotated image
-            const ocrResult = await analyze(rotated.dataUrl, userLevel);
-            setWords(ocrResult.words);
-
-            setIsTranslating(true);
-            await prefetchTranslations(
-                ocrResult.words.map(w => ({ text: w.text, context: w.context })),
-                (updatedCache) => setTranslationCache({ ...updatedCache })
-            );
-            setIsTranslating(false);
         } catch {
             // Rotation failed
         }
+    }, [imageDataUrl, isAnalyzing]);
+
+    // Handle analyze
+    const handleAnalyze = useCallback(async () => {
+        if (!imageDataUrl || isAnalyzing) return;
+        setWords([]);
+        setSelectedWord(null);
+        clearTranslationCache();
+        setTranslationCache({});
+
+        const ocrResult = await analyze(imageDataUrl, userLevel);
+        setWords(ocrResult.words);
+
+        setIsTranslating(true);
+        await prefetchTranslations(
+            ocrResult.words.map(w => ({ text: w.text, context: w.context })),
+            (updatedCache) => setTranslationCache({ ...updatedCache })
+        );
+        setIsTranslating(false);
     }, [imageDataUrl, isAnalyzing, analyze, userLevel]);
 
     // Handle user level change — re-classify words dynamically
@@ -335,18 +330,22 @@ export default function Home() {
                                 </svg>
                                 Rotate
                             </button>
-                            {words.length > 0 && (
-                                <button
-                                    onClick={async () => {
-                                        const ocrResult = await analyze(imageDataUrl, userLevel);
-                                        setWords(ocrResult.words);
-                                    }}
-                                    disabled={isAnalyzing}
-                                    className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-all duration-200 disabled:opacity-50"
-                                >
-                                    Re-Analyze
-                                </button>
-                            )}
+                            <button
+                                onClick={handleAnalyze}
+                                disabled={isAnalyzing}
+                                className={`px-4 py-2 text-sm rounded-lg transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5 ${
+                                    words.length === 0
+                                        ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow-lg shadow-amber-500/25 hover:shadow-amber-500/40'
+                                        : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                                }`}
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                                    />
+                                </svg>
+                                {words.length === 0 ? 'Analyze' : 'Re-Analyze'}
+                            </button>
                         </div>
                     </div>
                 )}
