@@ -14,31 +14,24 @@ import {
     getRelativeDifficulty,
     getHighlightStyle,
 } from '@/src/lib/wordLevels';
-import { OcrWord, OcrResult } from '@/src/lib/types';
+import { OcrWord } from '@/src/lib/types';
 import { prefetchTranslations, clearTranslationCache, translateSingleWord } from '@/src/lib/translationCache';
 
-/** Rotate an image on a canvas by the given radians and return the new data URL + dimensions */
-function rotateImageOnCanvas(
-    imgSrc: string,
-    radians: number
+/** Rotate an image 90 degrees clockwise on a canvas */
+function rotateImage90CW(
+    imgSrc: string
 ): Promise<{ dataUrl: string; width: number; height: number }> {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
-            const cos = Math.abs(Math.cos(radians));
-            const sin = Math.abs(Math.sin(radians));
-            const newW = Math.round(img.naturalWidth * cos + img.naturalHeight * sin);
-            const newH = Math.round(img.naturalWidth * sin + img.naturalHeight * cos);
-
             const canvas = document.createElement('canvas');
-            canvas.width = newW;
-            canvas.height = newH;
+            canvas.width = img.naturalHeight;
+            canvas.height = img.naturalWidth;
             const ctx = canvas.getContext('2d')!;
-            ctx.translate(newW / 2, newH / 2);
-            ctx.rotate(radians);
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate(Math.PI / 2);
             ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
-
-            resolve({ dataUrl: canvas.toDataURL('image/png'), width: newW, height: newH });
+            resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.92), width: canvas.width, height: canvas.height });
         };
         img.onerror = reject;
         img.src = imgSrc;
@@ -105,18 +98,6 @@ export default function Home() {
                 const ocrResult = await analyze(dataUrl, userLevel);
                 setWords(ocrResult.words);
 
-                // If Tesseract applied significant rotation, rotate the displayed image to match
-                const rad = ocrResult.rotateRadians;
-                if (rad !== null && Math.abs(rad) >= 0.005) {
-                    try {
-                        const rotated = await rotateImageOnCanvas(dataUrl, rad);
-                        setImageDataUrl(rotated.dataUrl);
-                        setImageNaturalSize({ width: rotated.width, height: rotated.height });
-                    } catch {
-                        // Rotation failed — keep original image
-                    }
-                }
-
                 // Pre-fetch translations in background
                 setIsTranslating(true);
                 await prefetchTranslations(
@@ -129,6 +110,31 @@ export default function Home() {
         },
         [analyze, userLevel]
     );
+
+    // Handle manual 90° rotation
+    const handleRotate = useCallback(async () => {
+        if (!imageDataUrl || isAnalyzing) return;
+        try {
+            const rotated = await rotateImage90CW(imageDataUrl);
+            setImageDataUrl(rotated.dataUrl);
+            setImageNaturalSize({ width: rotated.width, height: rotated.height });
+            setWords([]);
+            setSelectedWord(null);
+
+            // Re-run OCR on the rotated image
+            const ocrResult = await analyze(rotated.dataUrl, userLevel);
+            setWords(ocrResult.words);
+
+            setIsTranslating(true);
+            await prefetchTranslations(
+                ocrResult.words.map(w => ({ text: w.text, context: w.context })),
+                (updatedCache) => setTranslationCache({ ...updatedCache })
+            );
+            setIsTranslating(false);
+        } catch {
+            // Rotation failed
+        }
+    }, [imageDataUrl, isAnalyzing, analyze, userLevel]);
 
     // Handle user level change — re-classify words dynamically
     const handleLevelChange = useCallback(
@@ -315,6 +321,19 @@ export default function Home() {
                                 className="px-4 py-2 text-sm rounded-lg border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-all duration-200"
                             >
                                 Upload New Image
+                            </button>
+                            <button
+                                onClick={handleRotate}
+                                disabled={isAnalyzing}
+                                className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5"
+                                title="Rotate 90° clockwise"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                    />
+                                </svg>
+                                Rotate
                             </button>
                             {words.length > 0 && (
                                 <button

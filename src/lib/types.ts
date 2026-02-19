@@ -13,11 +13,9 @@ export interface OcrWord {
     level: CEFRLevel | null;
     difficulty: RelativeDifficulty;
     context?: string; // surrounding words for contextual meaning
-    angle?: number; // text angle in degrees from baseline detection
 }
 
 export interface OcrResult {
     words: OcrWord[];
-    rotateRadians: number | null;
 }
 

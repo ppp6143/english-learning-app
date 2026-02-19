@@ -39,15 +39,8 @@ export function useOcr(): UseOcrResult {
                     tessedit_pageseg_mode: PSM.AUTO_OSD,
                 });
 
-                const result = await worker.recognize(imageUrl, { rotateAuto: true });
+                const result = await worker.recognize(imageUrl);
 
-                // Extract rotation radians applied by Tesseract
-                const rotateRadians: number | null =
-                    typeof result.data.rotateRadians === 'number'
-                        ? result.data.rotateRadians
-                        : null;
-
-                // Pre-process raw OCR words with baseline angle extraction
                 const rawWords = result.data.words
                     .filter((w) => w.text.trim().length > 0)
                     .map((w) => {
@@ -56,15 +49,7 @@ export function useOcr(): UseOcrResult {
                             .replace(/[^a-zA-Z]+$/, '')
                             .replace(/[^a-zA-Z'-]/g, '');
 
-                        // Calculate angle from baseline if available
-                        let angle = 0;
-                        const bl = w.baseline;
-                        if (bl && bl.has_baseline) {
-                            const rad = Math.atan2(bl.y1 - bl.y0, bl.x1 - bl.x0);
-                            angle = (rad * 180) / Math.PI;
-                        }
-
-                        return { text, bbox: w.bbox, confidence: w.confidence, angle };
+                        return { text, bbox: w.bbox, confidence: w.confidence };
                     })
                     .filter((w) => w.text.length > 0);
 
@@ -97,17 +82,16 @@ export function useOcr(): UseOcrResult {
                             level,
                             difficulty,
                             context,
-                            angle: w.angle,
                         };
                     })
                 );
 
                 setProgress(100);
-                return { words, rotateRadians };
+                return { words };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : 'OCR analysis failed';
                 setError(msg);
-                return { words: [], rotateRadians: null };
+                return { words: [] };
             } finally {
                 if (worker) {
                     await worker.terminate();
