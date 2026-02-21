@@ -80,9 +80,9 @@ export default function Home() {
         return () => window.removeEventListener('resize', updateDisplaySize);
     }, [updateDisplaySize]);
 
-    // Handle image selection (no OCR yet — user can rotate first)
+    // Handle image selection — auto-analyze immediately
     const handleImageSelected = useCallback(
-        (_file: File, dataUrl: string) => {
+        async (_file: File, dataUrl: string) => {
             setImageDataUrl(dataUrl);
             setWords([]);
             setSelectedWord(null);
@@ -94,8 +94,18 @@ export default function Home() {
                 setImageNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
             };
             img.src = dataUrl;
+
+            const ocrResult = await analyze(dataUrl, userLevel);
+            setWords(ocrResult.words);
+
+            setIsTranslating(true);
+            await prefetchTranslations(
+                ocrResult.words.map(w => ({ text: w.text, context: w.context })),
+                (updatedCache) => setTranslationCache({ ...updatedCache })
+            );
+            setIsTranslating(false);
         },
-        []
+        [analyze, userLevel]
     );
 
     // Handle manual 90° rotation (image only, no OCR)
