@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 interface ImageUploaderProps {
     onImageSelected: (file: File, dataUrl: string) => void;
@@ -29,20 +29,89 @@ function rotateImage90CW(src: string): Promise<string> {
 export default function ImageUploader({ onImageSelected, isDisabled }: ImageUploaderProps) {
     const [isDragging, setIsDragging] = useState(false);
 
-    // Camera preview state — only set after camera capture, null otherwise
+    // Custom camera state
+    const [cameraActive, setCameraActive] = useState(false);
+    const [cameraError, setCameraError] = useState<string | null>(null);
+    const [stream, setStream] = useState<MediaStream | null>(null);
+
+    // Preview state (after capture)
     const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
 
     const inputRef = useRef<HTMLInputElement>(null);
-    const cameraInputRef = useRef<HTMLInputElement>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
 
-    // Gallery / drag-and-drop: no preview, go straight to onImageSelected
+    // Attach stream to video element when camera becomes active
+    useEffect(() => {
+        if (stream && videoRef.current) {
+            videoRef.current.srcObject = stream;
+        }
+    }, [stream, cameraActive]);
+
+    // Stop all tracks and close camera
+    const stopCamera = useCallback(() => {
+        if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+            setStream(null);
+        }
+        setCameraActive(false);
+        setCameraError(null);
+    }, [stream]);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            stream?.getTracks().forEach((track) => track.stop());
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [stream]);
+
+    // Open custom camera via getUserMedia
+    const startCamera = useCallback(async () => {
+        setCameraError(null);
+        try {
+            const mediaStream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
+                },
+                audio: false,
+            });
+            setStream(mediaStream);
+            setCameraActive(true);
+        } catch (err) {
+            const msg =
+                err instanceof DOMException && err.name === 'NotAllowedError'
+                    ? 'カメラへのアクセスが拒否されました。ブラウザの設定を確認してください。'
+                    : 'カメラを起動できませんでした。';
+            setCameraError(msg);
+        }
+    }, []);
+
+    // Capture a frame from the live video
+    const capturePhoto = useCallback(() => {
+        const video = videoRef.current;
+        if (!video || video.videoWidth === 0) return;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(video, 0, 0);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+        stopCamera();
+        setPreviewDataUrl(dataUrl);
+    }, [stopCamera]);
+
+    // ── Gallery / drag-and-drop ───────────────────────────────────────────
+
     const handleFile = useCallback(
         (file: File) => {
             if (!file.type.startsWith('image/')) return;
             const reader = new FileReader();
             reader.onload = (e) => {
-                const dataUrl = e.target?.result as string;
-                onImageSelected(file, dataUrl);
+                onImageSelected(file, e.target?.result as string);
             };
             reader.readAsDataURL(file);
         },
@@ -64,48 +133,28 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
         setIsDragging(true);
     }, []);
 
-    const handleDragLeave = useCallback(() => {
-        setIsDragging(false);
-    }, []);
+    const handleDragLeave = useCallback(() => setIsDragging(false), []);
 
     const handleGalleryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) handleFile(file);
     };
 
-    // Camera: show preview screen instead of passing through immediately
-    const handleCameraChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-            setPreviewDataUrl(ev.target?.result as string);
-        };
-        reader.readAsDataURL(file);
-        // Reset so the same photo can be retaken
-        e.target.value = '';
-    };
+    // ── Preview handlers ──────────────────────────────────────────────────
 
-    // Rotate the preview image 90° CW using Canvas API
     const handleRotate = useCallback(async () => {
         if (!previewDataUrl) return;
         try {
-            const rotated = await rotateImage90CW(previewDataUrl);
-            setPreviewDataUrl(rotated);
+            setPreviewDataUrl(await rotateImage90CW(previewDataUrl));
         } catch {
             // Rotation failed silently
         }
     }, [previewDataUrl]);
 
-    // ✕ Cancel — discard photo, go back to uploader
-    const handleCancel = useCallback(() => {
-        setPreviewDataUrl(null);
-    }, []);
+    const handleCancel = useCallback(() => setPreviewDataUrl(null), []);
 
-    // ✓ Confirm — pass the (possibly rotated) image to the parent
     const handleConfirm = useCallback(async () => {
         if (!previewDataUrl) return;
-        // Convert Base64 → Blob → File so the callback signature is satisfied
         const res = await fetch(previewDataUrl);
         const blob = await res.blob();
         const file = new File([blob], 'camera.jpg', { type: 'image/jpeg' });
@@ -113,11 +162,52 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
         setPreviewDataUrl(null);
     }, [previewDataUrl, onImageSelected]);
 
-    // ── Preview screen (camera only) ──────────────────────────────────────
+    // ── Camera live view (fullscreen overlay) ─────────────────────────────
+    if (cameraActive) {
+        return (
+            <div className="fixed inset-0 z-50 bg-black flex flex-col">
+                {/* Live video */}
+                <div className="flex-1 relative overflow-hidden">
+                    <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="absolute inset-0 w-full h-full object-cover"
+                    />
+                    {/* Close button */}
+                    <button
+                        onClick={stopCamera}
+                        className="absolute top-4 right-4 w-11 h-11 rounded-full bg-black/50 text-white
+                            flex items-center justify-center backdrop-blur-sm
+                            active:scale-95 transition-transform"
+                        title="Close camera"
+                    >
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                d="M6 18L18 6M6 6l12 12"
+                            />
+                        </svg>
+                    </button>
+                </div>
+
+                {/* Bottom bar — shutter button */}
+                <div className="h-28 bg-black/80 flex items-center justify-center">
+                    <button
+                        onClick={capturePhoto}
+                        className="w-16 h-16 rounded-full bg-white border-4 border-gray-400
+                            active:scale-90 transition-transform shadow-lg"
+                        title="Take photo"
+                    />
+                </div>
+            </div>
+        );
+    }
+
+    // ── Preview screen ✕ / 🔄 / ✓ ─────────────────────────────────────────
     if (previewDataUrl) {
         return (
             <div className="flex flex-col items-center gap-6">
-                {/* Preview image */}
                 <div className="rounded-xl overflow-hidden border border-gray-800 shadow-2xl shadow-black/40 bg-gray-900">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -128,15 +218,13 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
                     />
                 </div>
 
-                {/* ✕ / 🔄 / ✓ buttons */}
                 <div className="flex items-center gap-6">
                     {/* ✕ Cancel */}
                     <button
                         onClick={handleCancel}
                         className="w-14 h-14 rounded-full bg-gray-800 text-gray-400
                             hover:bg-red-900/60 hover:text-red-300
-                            flex items-center justify-center
-                            transition-all duration-200 shadow-md"
+                            flex items-center justify-center transition-all duration-200 shadow-md"
                         title="Retake"
                     >
                         <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -146,13 +234,12 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
                         </svg>
                     </button>
 
-                    {/* 🔄 Rotate 90° */}
+                    {/* 🔄 Rotate */}
                     <button
                         onClick={handleRotate}
                         className="w-14 h-14 rounded-full bg-gray-700 text-gray-300
                             hover:bg-gray-600
-                            flex items-center justify-center
-                            transition-all duration-200 shadow-md"
+                            flex items-center justify-center transition-all duration-200 shadow-md"
                         title="Rotate 90°"
                     >
                         <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -203,12 +290,8 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
         >
             {/* Upload icon */}
             <div className={`
-        w-16 h-16 rounded-full flex items-center justify-center
-        transition-all duration-300
-        ${isDragging
-                    ? 'bg-amber-400/20 text-amber-400 scale-110'
-                    : 'bg-gray-700/60 text-gray-400'
-                }
+        w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300
+        ${isDragging ? 'bg-amber-400/20 text-amber-400 scale-110' : 'bg-gray-700/60 text-gray-400'}
       `}>
                 <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
@@ -226,13 +309,18 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
                 </p>
             </div>
 
+            {/* Error message */}
+            {cameraError && (
+                <p className="text-sm text-red-400 text-center px-2">{cameraError}</p>
+            )}
+
             {/* Two-button layout */}
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-sm">
-                {/* Take Photo button */}
+                {/* Take Photo — opens getUserMedia camera */}
                 <button
                     type="button"
                     disabled={isDisabled}
-                    onClick={() => cameraInputRef.current?.click()}
+                    onClick={startCamera}
                     className="flex-1 w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl
                         bg-gradient-to-b from-amber-400 to-orange-500 text-gray-900 font-semibold text-sm
                         shadow-md shadow-amber-500/20 hover:shadow-lg hover:shadow-amber-500/30
@@ -250,7 +338,7 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
                     Take Photo
                 </button>
 
-                {/* Choose Image button */}
+                {/* Choose Image — gallery */}
                 <button
                     type="button"
                     disabled={isDisabled}
@@ -276,15 +364,7 @@ export default function ImageUploader({ onImageSelected, isDisabled }: ImageUplo
                 <span className="px-2 py-1 bg-gray-800 rounded">WEBP</span>
             </div>
 
-            {/* Hidden file inputs */}
-            <input
-                ref={cameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleCameraChange}
-                className="hidden"
-            />
+            {/* Gallery file input only (camera input removed) */}
             <input
                 ref={inputRef}
                 type="file"
