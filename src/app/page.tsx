@@ -49,6 +49,9 @@ export default function Home() {
     const imageRef = useRef<HTMLImageElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
+    // Pending image state (confirmation screen before auto-analyze)
+    const [pendingImageDataUrl, setPendingImageDataUrl] = useState<string | null>(null);
+
     // OCR state
     const { analyze, isAnalyzing, progress, error } = useOcr();
     const [words, setWords] = useState<OcrWord[]>([]);
@@ -80,25 +83,60 @@ export default function Home() {
         return () => window.removeEventListener('resize', updateDisplaySize);
     }, [updateDisplaySize]);
 
-    // Handle image selection (no OCR yet — user can rotate first)
+    // Handle image selection → show confirmation screen
     const handleImageSelected = useCallback(
         (_file: File, dataUrl: string) => {
-            setImageDataUrl(dataUrl);
-            setWords([]);
-            setSelectedWord(null);
-            clearTranslationCache();
-            setTranslationCache({});
-
-            const img = new Image();
-            img.onload = () => {
-                setImageNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
-            };
-            img.src = dataUrl;
+            setPendingImageDataUrl(dataUrl);
         },
         []
     );
 
-    // Handle manual 90° rotation (image only, no OCR)
+    // Rotate pending image (on confirmation screen)
+    const handlePendingRotate = useCallback(async () => {
+        if (!pendingImageDataUrl) return;
+        try {
+            const rotated = await rotateImage90CW(pendingImageDataUrl);
+            setPendingImageDataUrl(rotated.dataUrl);
+        } catch {
+            // Rotation failed
+        }
+    }, [pendingImageDataUrl]);
+
+    // Cancel confirmation → back to uploader
+    const handlePendingCancel = useCallback(() => {
+        setPendingImageDataUrl(null);
+    }, []);
+
+    // Confirm → set image and auto-analyze
+    const handlePendingConfirm = useCallback(async () => {
+        if (!pendingImageDataUrl || isAnalyzing) return;
+        const dataUrl = pendingImageDataUrl;
+        setPendingImageDataUrl(null);
+
+        setWords([]);
+        setSelectedWord(null);
+        clearTranslationCache();
+        setTranslationCache({});
+        setImageDataUrl(dataUrl);
+
+        const img = new Image();
+        img.onload = () => {
+            setImageNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
+        };
+        img.src = dataUrl;
+
+        const ocrResult = await analyze(dataUrl, userLevel);
+        setWords(ocrResult.words);
+
+        setIsTranslating(true);
+        await prefetchTranslations(
+            ocrResult.words.map(w => ({ text: w.text, context: w.context })),
+            (updatedCache) => setTranslationCache({ ...updatedCache })
+        );
+        setIsTranslating(false);
+    }, [pendingImageDataUrl, isAnalyzing, analyze, userLevel]);
+
+    // Handle manual 90° rotation (post-analyze, image only)
     const handleRotate = useCallback(async () => {
         if (!imageDataUrl || isAnalyzing) return;
         try {
@@ -214,10 +252,64 @@ export default function Home() {
             </header>
 
             <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-                {/* Upload area — show when no image */}
-                {!imageDataUrl && (
+                {/* Upload area — show when no image and no pending */}
+                {!imageDataUrl && !pendingImageDataUrl && (
                     <div className="mt-8">
                         <ImageUploader onImageSelected={handleImageSelected} />
+                    </div>
+                )}
+
+                {/* Confirmation screen — shown after image selection, before analyze */}
+                {pendingImageDataUrl && (
+                    <div className="mt-8 flex flex-col items-center gap-5">
+                        <div className="relative rounded-xl overflow-hidden border border-gray-800 shadow-2xl shadow-black/40 bg-gray-900">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                src={pendingImageDataUrl}
+                                alt="Preview"
+                                className="block max-w-full h-auto"
+                                style={{ maxHeight: '65vh' }}
+                            />
+                        </div>
+
+                        {/* X / Rotate / Check buttons */}
+                        <div className="flex items-center gap-6">
+                            {/* X — cancel */}
+                            <button
+                                onClick={handlePendingCancel}
+                                className="w-14 h-14 rounded-full bg-gray-800 text-gray-400 hover:bg-red-900/60 hover:text-red-300 flex items-center justify-center transition-all duration-200 shadow-md"
+                                title="Cancel"
+                            >
+                                <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+
+                            {/* Rotate 90° */}
+                            <button
+                                onClick={handlePendingRotate}
+                                className="w-14 h-14 rounded-full bg-gray-700 text-gray-300 hover:bg-gray-600 flex items-center justify-center transition-all duration-200 shadow-md"
+                                title="Rotate 90° clockwise"
+                            >
+                                <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                    />
+                                </svg>
+                            </button>
+
+                            {/* Check — confirm & auto-analyze */}
+                            <button
+                                onClick={handlePendingConfirm}
+                                disabled={isAnalyzing}
+                                className="w-14 h-14 rounded-full bg-gradient-to-b from-amber-400 to-orange-500 text-gray-900 flex items-center justify-center shadow-lg shadow-amber-500/30 hover:shadow-amber-500/50 transition-all duration-200 disabled:opacity-50"
+                                title="Confirm & Analyze"
+                            >
+                                <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                 )}
 
@@ -310,6 +402,7 @@ export default function Home() {
                             <button
                                 onClick={() => {
                                     setImageDataUrl(null);
+                                    setPendingImageDataUrl(null);
                                     setWords([]);
                                     setSelectedWord(null);
                                 }}
