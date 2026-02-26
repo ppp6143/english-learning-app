@@ -245,11 +245,83 @@ function rotateByAngle(img: HTMLImageElement, angleDeg: number): string {
     return canvas.toDataURL('image/png');
 }
 
+interface RawWord {
+    text: string;
+    bbox: { x0: number; y0: number; x1: number; y1: number };
+    confidence: number;
+}
+
+/**
+ * Merge word fragments that were incorrectly split by OCR.
+ * If two adjacent words on the same line have a very small horizontal gap,
+ * they are likely parts of one word and should be merged.
+ */
+function mergeFragmentedWords(words: RawWord[]): RawWord[] {
+    if (words.length < 2) return words;
+
+    // Sort by vertical midpoint (line), then horizontal position
+    const sorted = [...words].sort((a, b) => {
+        const aMidY = (a.bbox.y0 + a.bbox.y1) / 2;
+        const bMidY = (b.bbox.y0 + b.bbox.y1) / 2;
+        const minH = Math.min(a.bbox.y1 - a.bbox.y0, b.bbox.y1 - b.bbox.y0);
+        if (Math.abs(aMidY - bMidY) > minH * 0.5) return aMidY - bMidY;
+        return a.bbox.x0 - b.bbox.x0;
+    });
+
+    const merged: RawWord[] = [];
+    let current = { ...sorted[0], bbox: { ...sorted[0].bbox } };
+
+    for (let i = 1; i < sorted.length; i++) {
+        const next = sorted[i];
+
+        // Check if on the same line
+        const curMidY = (current.bbox.y0 + current.bbox.y1) / 2;
+        const nextMidY = (next.bbox.y0 + next.bbox.y1) / 2;
+        const minH = Math.min(
+            current.bbox.y1 - current.bbox.y0,
+            next.bbox.y1 - next.bbox.y0,
+        );
+        const sameLine = Math.abs(curMidY - nextMidY) < minH * 0.5;
+
+        if (sameLine) {
+            const gap = next.bbox.x0 - current.bbox.x1;
+            // Average character width from both words
+            const curCharW =
+                (current.bbox.x1 - current.bbox.x0) / Math.max(1, current.text.length);
+            const nextCharW =
+                (next.bbox.x1 - next.bbox.x0) / Math.max(1, next.text.length);
+            const avgCharW = (curCharW + nextCharW) / 2;
+
+            // Merge if gap is smaller than half a character width
+            if (gap < avgCharW * 0.5) {
+                current = {
+                    text: current.text + next.text,
+                    bbox: {
+                        x0: Math.min(current.bbox.x0, next.bbox.x0),
+                        y0: Math.min(current.bbox.y0, next.bbox.y0),
+                        x1: Math.max(current.bbox.x1, next.bbox.x1),
+                        y1: Math.max(current.bbox.y1, next.bbox.y1),
+                    },
+                    confidence: Math.min(current.confidence, next.confidence),
+                };
+                continue;
+            }
+        }
+
+        merged.push(current);
+        current = { ...next, bbox: { ...next.bbox } };
+    }
+    merged.push(current);
+
+    return merged;
+}
+
 interface PreprocessResult {
-    ocrUrl: string;       // binarized image for OCR
+    ocrUrl: string;       // binarized image for OCR (with padding)
     displayUrl: string;   // deskewed color image for display (or original if no skew)
-    width: number;        // width of deskewed/OCR image
-    height: number;       // height of deskewed/OCR image
+    width: number;        // width of display image (without padding)
+    height: number;       // height of display image (without padding)
+    padding: number;      // padding added around OCR image
     wasDeskewed: boolean;
 }
 
@@ -317,11 +389,23 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
     }
 
     ctx.putImageData(imageData, 0, 0);
+
+    // Add white padding around OCR image for better edge character recognition
+    const PADDING = 30;
+    const paddedCanvas = document.createElement('canvas');
+    paddedCanvas.width = finalW + PADDING * 2;
+    paddedCanvas.height = finalH + PADDING * 2;
+    const pCtx = paddedCanvas.getContext('2d')!;
+    pCtx.fillStyle = '#ffffff';
+    pCtx.fillRect(0, 0, paddedCanvas.width, paddedCanvas.height);
+    pCtx.drawImage(canvas, PADDING, PADDING);
+
     return {
-        ocrUrl: canvas.toDataURL('image/png'),
+        ocrUrl: paddedCanvas.toDataURL('image/png'),
         displayUrl,
         width: finalW,
         height: finalH,
+        padding: PADDING,
         wasDeskewed,
     };
 }
@@ -357,16 +441,33 @@ export function useOcr(): UseOcrResult {
                 });
 
                 const result = await worker.recognize(preprocess.ocrUrl);
+                const pad = preprocess.padding;
 
-                const rawWords = result.data.words
+                // Step 1: Extract words and adjust bboxes for padding offset
+                const ocrWords: RawWord[] = result.data.words
                     .filter((w) => w.text.trim().length > 0)
-                    .filter((w) => w.confidence >= 40) // Filter low-confidence words
+                    .filter((w) => w.confidence >= 40)
+                    .map((w) => ({
+                        text: w.text.trim(),
+                        bbox: {
+                            x0: w.bbox.x0 - pad,
+                            y0: w.bbox.y0 - pad,
+                            x1: w.bbox.x1 - pad,
+                            y1: w.bbox.y1 - pad,
+                        },
+                        confidence: w.confidence,
+                    }));
+
+                // Step 2: Merge word fragments split by OCR
+                const mergedWords = mergeFragmentedWords(ocrWords);
+
+                // Step 3: Clean text
+                const rawWords = mergedWords
                     .map((w) => {
                         const text = w.text
                             .replace(/^[^a-zA-Z]+/, '')
                             .replace(/[^a-zA-Z]+$/, '')
                             .replace(/[^a-zA-Z'-]/g, '');
-
                         return { text, bbox: w.bbox, confidence: w.confidence };
                     })
                     .filter((w) => w.text.length > 0);
