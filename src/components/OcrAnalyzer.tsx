@@ -245,14 +245,24 @@ function rotateByAngle(img: HTMLImageElement, angleDeg: number): string {
     return canvas.toDataURL('image/png');
 }
 
+interface PreprocessResult {
+    ocrUrl: string;       // binarized image for OCR
+    displayUrl: string;   // deskewed color image for display (or original if no skew)
+    width: number;        // width of deskewed/OCR image
+    height: number;       // height of deskewed/OCR image
+    wasDeskewed: boolean;
+}
+
 /**
  * Preprocess an image for better OCR accuracy:
  * 1. Grayscale conversion + contrast enhancement
  * 2. Skew detection via projection profile analysis
  * 3. Deskew rotation (if skew > 0.5°)
  * 4. Otsu binarization on the deskewed image
+ *
+ * Returns both the binarized OCR image and the deskewed display image.
  */
-async function preprocessImage(imageUrl: string): Promise<string> {
+async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
     const img = await loadImage(imageUrl);
     const w = img.naturalWidth;
     const h = img.naturalHeight;
@@ -272,21 +282,28 @@ async function preprocessImage(imageUrl: string): Promise<string> {
 
     // --- Detect and correct skew ---
     const skewAngle = detectSkewAngle(gray, w, h, threshold);
+    let displayUrl = imageUrl;
     let sourceUrl = imageUrl;
+    let wasDeskewed = false;
     if (Math.abs(skewAngle) > 0.5) {
-        sourceUrl = rotateByAngle(img, -skewAngle);
+        const rotatedUrl = rotateByAngle(img, -skewAngle);
+        displayUrl = rotatedUrl;
+        sourceUrl = rotatedUrl;
+        wasDeskewed = true;
     }
 
     // --- Binarize the (possibly deskewed) image ---
     const finalImg = await loadImage(sourceUrl);
+    const finalW = finalImg.naturalWidth;
+    const finalH = finalImg.naturalHeight;
     const canvas = document.createElement('canvas');
-    canvas.width = finalImg.naturalWidth;
-    canvas.height = finalImg.naturalHeight;
+    canvas.width = finalW;
+    canvas.height = finalH;
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(finalImg, 0, 0);
 
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const finalPixels = canvas.width * canvas.height;
+    const imageData = ctx.getImageData(0, 0, finalW, finalH);
+    const finalPixels = finalW * finalH;
     const finalGray = toGrayscale(imageData.data, finalPixels);
     histogramStretch(finalGray);
     const finalThreshold = otsuThreshold(finalGray);
@@ -300,7 +317,13 @@ async function preprocessImage(imageUrl: string): Promise<string> {
     }
 
     ctx.putImageData(imageData, 0, 0);
-    return canvas.toDataURL('image/png');
+    return {
+        ocrUrl: canvas.toDataURL('image/png'),
+        displayUrl,
+        width: finalW,
+        height: finalH,
+        wasDeskewed,
+    };
 }
 
 export function useOcr(): UseOcrResult {
@@ -318,7 +341,7 @@ export function useOcr(): UseOcrResult {
 
             try {
                 // Preprocess image for better OCR accuracy
-                const preprocessedUrl = await preprocessImage(imageUrl);
+                const preprocess = await preprocessImage(imageUrl);
 
                 worker = await createWorker('eng', 1, {
                     logger: (m) => {
@@ -333,7 +356,7 @@ export function useOcr(): UseOcrResult {
                     tessedit_pageseg_mode: PSM.AUTO_OSD,
                 });
 
-                const result = await worker.recognize(preprocessedUrl);
+                const result = await worker.recognize(preprocess.ocrUrl);
 
                 const rawWords = result.data.words
                     .filter((w) => w.text.trim().length > 0)
@@ -382,11 +405,16 @@ export function useOcr(): UseOcrResult {
                 );
 
                 setProgress(100);
-                return { words };
+                return {
+                    words,
+                    displayImageUrl: preprocess.wasDeskewed ? preprocess.displayUrl : undefined,
+                    ocrImageWidth: preprocess.width,
+                    ocrImageHeight: preprocess.height,
+                };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : 'OCR analysis failed';
                 setError(msg);
-                return { words: [] };
+                return { words: [], ocrImageWidth: 0, ocrImageHeight: 0 };
             } finally {
                 if (worker) {
                     await worker.terminate();

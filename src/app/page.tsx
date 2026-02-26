@@ -98,6 +98,12 @@ export default function Home() {
             const ocrResult = await analyze(dataUrl, userLevel);
             setWords(ocrResult.words);
 
+            // If deskewed, update displayed image and dimensions to match OCR coordinates
+            if (ocrResult.displayImageUrl) {
+                setImageDataUrl(ocrResult.displayImageUrl);
+                setImageNaturalSize({ width: ocrResult.ocrImageWidth, height: ocrResult.ocrImageHeight });
+            }
+
             const finalCache = prefetchTranslations(
                 ocrResult.words.map(w => ({ text: w.text })),
             );
@@ -130,6 +136,12 @@ export default function Home() {
 
         const ocrResult = await analyze(imageDataUrl, userLevel);
         setWords(ocrResult.words);
+
+        // If deskewed, update displayed image and dimensions to match OCR coordinates
+        if (ocrResult.displayImageUrl) {
+            setImageDataUrl(ocrResult.displayImageUrl);
+            setImageNaturalSize({ width: ocrResult.ocrImageWidth, height: ocrResult.ocrImageHeight });
+        }
 
         const finalCache = prefetchTranslations(
             ocrResult.words.map(w => ({ text: w.text })),
