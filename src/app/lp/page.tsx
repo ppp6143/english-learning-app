@@ -1,9 +1,24 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { SITE_URL, SITE_NAME } from '@/src/lib/siteConfig';
 
 export const metadata: Metadata = {
-    title: 'WordLens — 写真を撮るだけで英単語レベルがわかる',
-    description: '英語テキストの写真を撮るだけで、あなたのレベルに合った単語をハイライト。CEFR対応の無料英単語分析ツール。',
+    title: `${SITE_NAME} — 写真を撮るだけで英単語レベルがわかる`,
+    description: '英語テキストの写真を撮るだけで、あなたのレベルに合った単語をハイライト。CEFR対応・47,000語オフライン辞書搭載の無料英単語分析ツール。',
+    alternates: { canonical: `${SITE_URL}/lp` },
+};
+
+/** JSON-LD structured data for search engines */
+const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'WebApplication',
+    name: SITE_NAME,
+    url: SITE_URL,
+    description: '英語テキストの写真を撮影し、CEFRレベル別に単語をハイライト表示する無料ツール',
+    applicationCategory: 'EducationalApplication',
+    operatingSystem: 'Web',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'JPY' },
+    inLanguage: ['ja', 'en'],
 };
 
 /* ───────── CSS App Mockup ───────── */
@@ -125,6 +140,11 @@ function FeatureCard({ icon, title, desc }: { icon: React.ReactNode; title: stri
 export default function LandingPage() {
     return (
         <main className="min-h-screen bg-gray-950 text-gray-100">
+            {/* JSON-LD structured data */}
+            <script
+                type="application/ld+json"
+                dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+            />
 
             {/* ── Hero ── */}
             <section className="relative overflow-hidden">
