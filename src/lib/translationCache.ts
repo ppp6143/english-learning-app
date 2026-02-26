@@ -2,6 +2,7 @@
 
 import DICT from './localDictionary';
 import { getLemmatizedCandidates } from './lemmatizer';
+import { lookupPhrasalVerb } from './phrasalVerbs';
 
 type TranslationCache = Record<string, string[]>;
 
@@ -176,6 +177,58 @@ export function translateSingleWord(
     if (local && local.length > 0) {
         cache[key] = local;
         return { primary: local[0], alternatives: local.slice(1) };
+    }
+
+    return null;
+}
+
+/**
+ * Translate a phrase (multi-word input, e.g. phrasal verbs or compound terms).
+ * Preserves spaces for lookup unlike translateSingleWord which strips them.
+ *
+ * Search order:
+ *   1. Phrasal verb dictionary (only registered phrases)
+ *   2. Local DICT (lowercase key with spaces)
+ *   3. Local DICT (title case)
+ *   4. Local DICT (first-letter uppercase)
+ */
+export function translatePhrase(
+    phrase: string,
+): { primary: string; alternatives?: string[]; source: 'phrasal' | 'dict' } | null {
+    const normalized = phrase.toLowerCase().trim().replace(/\s+/g, ' ');
+    if (!normalized) return null;
+
+    // 1. Phrasal verb dictionary
+    const pv = lookupPhrasalVerb(normalized);
+    if (pv) {
+        return { primary: pv.translation, source: 'phrasal' };
+    }
+
+    // 2. DICT lookup — lowercase (preserving spaces/hyphens)
+    const dictKey = normalized.replace(/[^a-z\s'-]/g, '');
+    if (DICT[dictKey]) {
+        const cleaned = cleanDictionaryEntry(DICT[dictKey]);
+        if (cleaned.length > 0) {
+            return { primary: cleaned[0], alternatives: cleaned.slice(1), source: 'dict' };
+        }
+    }
+
+    // 3. DICT — title case (e.g. "Acid Rain")
+    const titleCase = dictKey.replace(/\b\w/g, c => c.toUpperCase());
+    if (DICT[titleCase]) {
+        const cleaned = cleanDictionaryEntry(DICT[titleCase]);
+        if (cleaned.length > 0) {
+            return { primary: cleaned[0], alternatives: cleaned.slice(1), source: 'dict' };
+        }
+    }
+
+    // 4. DICT — first letter uppercase only (e.g. "Acid rain")
+    const firstUpper = dictKey.charAt(0).toUpperCase() + dictKey.slice(1);
+    if (firstUpper !== titleCase && DICT[firstUpper]) {
+        const cleaned = cleanDictionaryEntry(DICT[firstUpper]);
+        if (cleaned.length > 0) {
+            return { primary: cleaned[0], alternatives: cleaned.slice(1), source: 'dict' };
+        }
     }
 
     return null;

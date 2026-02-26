@@ -17,7 +17,9 @@ import {
     getWordLevel,
 } from '@/src/lib/wordLevels';
 import { OcrWord, OcrEngine } from '@/src/lib/types';
-import { prefetchTranslations, clearTranslationCache, translateSingleWord } from '@/src/lib/translationCache';
+import { prefetchTranslations, clearTranslationCache, translateSingleWord, translatePhrase } from '@/src/lib/translationCache';
+import { getRelatedPhrasalVerbs, PhrasalVerbEntry } from '@/src/lib/phrasalVerbs';
+import { decomposeWord, MorphemeDecomposition } from '@/src/lib/morphemeAnalyzer';
 
 /** Rotate an image 90 degrees clockwise on a canvas */
 function rotateImage90CW(
@@ -74,6 +76,10 @@ export default function Home() {
         word: string;
         level: string | null;
         translation: string | null;
+        alternatives?: string[];
+        source?: 'phrasal' | 'dict' | 'single';
+        relatedPhrases?: PhrasalVerbEntry[];
+        decomposition?: MorphemeDecomposition | null;
     } | null>(null);
 
     // Update display size on resize
@@ -179,16 +185,39 @@ export default function Home() {
     }, [updateDisplaySize]);
 
     // Manual search
-    const handleSearch = useCallback(() => {
-        const q = searchInput.trim();
+    const handleSearch = useCallback((overrideQuery?: string) => {
+        const q = (overrideQuery ?? searchInput).trim();
         if (!q) return;
-        const level = getWordLevel(q);
-        const tr = translateSingleWord(q);
-        setSearchResult({
-            word: q,
-            level: level,
-            translation: tr ? tr.primary : null,
-        });
+
+        const hasSpace = /\s/.test(q);
+
+        if (hasSpace) {
+            // Multi-word: try phrase lookup
+            const phraseResult = translatePhrase(q);
+            setSearchResult({
+                word: q,
+                level: null,
+                translation: phraseResult ? phraseResult.primary : null,
+                alternatives: phraseResult?.alternatives,
+                source: phraseResult?.source,
+            });
+        } else {
+            // Single word: standard lookup + related phrasal verbs + decomposition
+            const level = getWordLevel(q);
+            const tr = translateSingleWord(q);
+            const related = getRelatedPhrasalVerbs(q);
+            const decomp = !tr ? decomposeWord(q) : null;
+
+            setSearchResult({
+                word: q,
+                level: level,
+                translation: tr ? tr.primary : null,
+                alternatives: tr?.alternatives,
+                source: tr ? 'single' : undefined,
+                relatedPhrases: related.length > 0 ? related : undefined,
+                decomposition: decomp,
+            });
+        }
     }, [searchInput]);
 
     const handleSearchClear = useCallback(() => {
@@ -338,7 +367,7 @@ export default function Home() {
                                     )}
                                 </div>
                                 <button
-                                    onClick={handleSearch}
+                                    onClick={() => handleSearch()}
                                     className="px-3 py-2 text-sm rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-amber-300 transition-all duration-200"
                                 >
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -347,19 +376,74 @@ export default function Home() {
                                 </button>
                             </div>
                             {searchResult && (
-                                <div className="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm">
+                                <div className="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm space-y-2">
                                     {searchResult.translation ? (
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                            <span className="font-semibold text-amber-300">{searchResult.word}</span>
-                                            {searchResult.level && (
-                                                <span className="px-1.5 py-0.5 text-xs font-bold rounded bg-gray-700 text-gray-300">
-                                                    {searchResult.level}
-                                                </span>
+                                        <div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="font-semibold text-amber-300">{searchResult.word}</span>
+                                                {searchResult.level && (
+                                                    <span className="px-1.5 py-0.5 text-xs font-bold rounded bg-gray-700 text-gray-300">
+                                                        {searchResult.level}
+                                                    </span>
+                                                )}
+                                                {searchResult.source === 'phrasal' && (
+                                                    <span className="px-1.5 py-0.5 text-xs font-bold rounded bg-blue-900/50 text-blue-300 border border-blue-700/50">
+                                                        句動詞
+                                                    </span>
+                                                )}
+                                                <span className="text-gray-400">{searchResult.translation}</span>
+                                            </div>
+                                            {searchResult.alternatives && searchResult.alternatives.length > 0 && (
+                                                <div className="mt-1 flex flex-wrap gap-x-3">
+                                                    {searchResult.alternatives.slice(0, 3).map((alt, i) => (
+                                                        <span key={i} className="text-gray-500 text-xs">{alt}</span>
+                                                    ))}
+                                                </div>
                                             )}
-                                            <span className="text-gray-400">{searchResult.translation}</span>
+                                        </div>
+                                    ) : searchResult.decomposition ? (
+                                        <div>
+                                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                                                <span className="font-semibold text-gray-300">{searchResult.word}</span>
+                                                <span className="text-xs text-gray-500">辞書に未登録 — 形態素分解:</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 flex-wrap">
+                                                {searchResult.decomposition.morphemes.map((m, i) => (
+                                                    <span key={i} className={`inline-flex flex-col items-center px-2 py-1 rounded text-xs ${
+                                                        m.type === 'prefix' ? 'bg-purple-900/30 text-purple-300 border border-purple-700/30' :
+                                                        m.type === 'suffix' ? 'bg-teal-900/30 text-teal-300 border border-teal-700/30' :
+                                                        'bg-amber-900/30 text-amber-300 border border-amber-700/30'
+                                                    }`}>
+                                                        <span className="font-semibold">{m.text}</span>
+                                                        <span className="text-[10px] opacity-75">{m.meaning}</span>
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
                                     ) : (
-                                        <span className="text-gray-500">Not found in dictionary</span>
+                                        <span className="text-gray-500">辞書に未登録</span>
+                                    )}
+
+                                    {/* Related phrasal verbs */}
+                                    {searchResult.relatedPhrases && searchResult.relatedPhrases.length > 0 && (
+                                        <div className="pt-2 border-t border-gray-800">
+                                            <p className="text-xs text-gray-500 mb-1">関連する句動詞:</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {searchResult.relatedPhrases.slice(0, 6).map((pv, i) => (
+                                                    <button
+                                                        key={i}
+                                                        onClick={() => {
+                                                            setSearchInput(pv.phrase);
+                                                            handleSearch(pv.phrase);
+                                                        }}
+                                                        className="px-2 py-0.5 text-xs rounded bg-blue-900/20 text-blue-300 border border-blue-800/30 hover:bg-blue-900/40 hover:border-blue-700/50 transition-all"
+                                                    >
+                                                        {pv.phrase}
+                                                        <span className="ml-1 text-gray-500">{pv.translation.split('、')[0]}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
                             )}

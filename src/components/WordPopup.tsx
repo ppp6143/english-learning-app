@@ -4,6 +4,8 @@ import React, { useEffect, useRef } from 'react';
 import { OcrWord } from '@/src/lib/types';
 import { getHighlightStyle, getWordLevel, getLevelDescription } from '@/src/lib/wordLevels';
 import { translateSingleWord } from '@/src/lib/translationCache';
+import { getRelatedPhrasalVerbs } from '@/src/lib/phrasalVerbs';
+import { decomposeWord } from '@/src/lib/morphemeAnalyzer';
 import { PopupScaleMode, PopupPositionMode } from './UISettings';
 
 interface WordPopupProps {
@@ -38,6 +40,12 @@ export default function WordPopup({
     const displayAlts = altsJa
         ? altsJa.split(' / ')
         : localResult?.alternatives || [];
+
+    // Related phrasal verbs
+    const relatedPhrases = getRelatedPhrasalVerbs(word.text);
+
+    // Morpheme decomposition (only when no translation found)
+    const decomposition = !displayPrimary ? decomposeWord(word.text) : null;
 
     // Close handlers
     useEffect(() => {
@@ -234,10 +242,41 @@ export default function WordPopup({
                                         </div>
                                     )}
                                 </>
+                            ) : decomposition ? (
+                                <div>
+                                    <p className="text-[10px] text-gray-500 mb-1.5">形態素分解:</p>
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                        {decomposition.morphemes.map((m, i) => (
+                                            <span key={i} className={`inline-flex flex-col items-center px-1.5 py-0.5 rounded text-xs ${
+                                                m.type === 'prefix' ? 'bg-purple-900/30 text-purple-300 border border-purple-700/30' :
+                                                m.type === 'suffix' ? 'bg-teal-900/30 text-teal-300 border border-teal-700/30' :
+                                                'bg-amber-900/30 text-amber-300 border border-amber-700/30'
+                                            }`}>
+                                                <span className="font-semibold">{m.text}</span>
+                                                <span className="text-[9px] opacity-75">{m.meaning}</span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
                             ) : (
                                 <p className="text-sm text-gray-500">辞書に未登録</p>
                             )}
                         </div>
+
+                        {/* Related phrasal verbs */}
+                        {relatedPhrases.length > 0 && (
+                            <div className="pb-1 border-t border-gray-800 pt-2">
+                                <p className="text-[10px] text-gray-500 mb-1">関連する句動詞:</p>
+                                <div className="space-y-0.5">
+                                    {relatedPhrases.slice(0, 4).map((pv, i) => (
+                                        <p key={i} className="text-xs">
+                                            <span className="text-blue-300">{pv.phrase}</span>
+                                            <span className="text-gray-500 ml-1.5">{pv.translation.split('、')[0]}</span>
+                                        </p>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Footer */}
                         <div className="pt-2 border-t border-gray-800 flex items-center justify-between">
