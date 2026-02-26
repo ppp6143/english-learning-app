@@ -1,6 +1,4 @@
-// Translation cache service
-// LOCAL DICTIONARY FIRST → Gemini API fallback
-// Instant translations for words in the local dictionary
+// Translation cache service — local dictionary only
 
 import DICT from './localDictionary';
 import { getLemmatizedCandidates } from './lemmatizer';
@@ -17,6 +15,80 @@ export function clearTranslationCache(): void {
 }
 
 /**
+ * Clean a raw dictionary entry array into concise Japanese translations.
+ *
+ * Processing steps:
+ * 1. Skip =xxx reference entries
+ * 2. Remove 《...》 annotations (usage markers)
+ * 3. Extract content from 『...』 brackets (prioritized)
+ * 4. Remove grammar patterns like (…の), (+of+名), etc.
+ * 5. Remove (...) supplementary explanations
+ * 6. Split by ;、, into individual translations
+ * 7. Filter out English-only or empty entries
+ * 8. Deduplicate, limit to 5, prioritize 『』-enclosed terms
+ */
+export function cleanDictionaryEntry(entries: string[]): string[] {
+    const prioritized: string[] = [];
+    const normal: string[] = [];
+
+    for (const entry of entries) {
+        // Skip reference entries like "=another_word"
+        if (/^=/.test(entry.trim())) continue;
+
+        let text = entry;
+
+        // Extract 『...』 content as high-priority translations
+        const bracketMatches = text.match(/『([^』]+)』/g);
+        if (bracketMatches) {
+            for (const m of bracketMatches) {
+                const inner = m.replace(/[『』]/g, '').trim();
+                if (inner && !/^[a-zA-Z\s]+$/.test(inner)) {
+                    prioritized.push(inner);
+                }
+            }
+        }
+
+        // Remove 《...》 annotations
+        text = text.replace(/《[^》]*》/g, '');
+
+        // Remove 『...』 brackets but keep content
+        text = text.replace(/[『』]/g, '');
+
+        // Remove grammar patterns: (+of+名), (…の), etc.
+        text = text.replace(/\([+\w…〈〉]+\)/g, '');
+
+        // Remove (...) supplementary explanations
+        text = text.replace(/\([^)]*\)/g, '');
+        text = text.replace(/（[^）]*）/g, '');
+
+        // Split by delimiters
+        const parts = text.split(/[;；、,，]+/);
+
+        for (const part of parts) {
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+            // Skip if only English letters/spaces/punctuation
+            if (/^[a-zA-Z\s\-'.:!?]+$/.test(trimmed)) continue;
+            normal.push(trimmed);
+        }
+    }
+
+    // Combine: prioritized first, then normal, deduplicated
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    for (const item of [...prioritized, ...normal]) {
+        if (!seen.has(item)) {
+            seen.add(item);
+            result.push(item);
+        }
+        if (result.length >= 5) break;
+    }
+
+    return result;
+}
+
+/**
  * Look up a word in the local dictionary (tries lemmatized forms too).
  */
 function lookupLocal(word: string): string[] | null {
@@ -24,12 +96,12 @@ function lookupLocal(word: string): string[] | null {
     if (!w) return null;
 
     // Direct lookup
-    if (DICT[w]) return DICT[w];
+    if (DICT[w]) return cleanDictionaryEntry(DICT[w]);
 
     // Try lemmatized candidates
     const candidates = getLemmatizedCandidates(w);
     for (const c of candidates) {
-        if (DICT[c]) return DICT[c];
+        if (DICT[c]) return cleanDictionaryEntry(DICT[c]);
     }
 
     return null;
@@ -53,17 +125,11 @@ export function getTranslationCacheFlat(): Record<string, string> {
 }
 
 /**
- * Pre-fetch translations for all OCR words.
- * Step 1: Instantly resolve from local dictionary
- * Step 2: Batch remaining words to Gemini API (with error handling)
+ * Pre-fetch translations for all OCR words from local dictionary.
  */
-export async function prefetchTranslations(
-    words: { text: string; context?: string }[],
-    onProgress?: (cache: Record<string, string>) => void
-): Promise<Record<string, string>> {
-    const remaining: { word: string; context: string }[] = [];
-
-    // Step 1: Local dictionary — instant
+export function prefetchTranslations(
+    words: { text: string }[],
+): Record<string, string> {
     for (const w of words) {
         const key = w.text.toLowerCase().replace(/[^a-z'-]/g, '');
         if (!key || cache[key]) continue;
@@ -71,63 +137,6 @@ export async function prefetchTranslations(
         const local = lookupLocal(key);
         if (local) {
             cache[key] = local;
-        } else {
-            remaining.push({ word: w.text, context: "" });
-        }
-    }
-
-    // Report local results immediately
-    if (onProgress) {
-        onProgress(getTranslationCacheFlat());
-    }
-
-    // Step 2: Gemini API for remaining words (with full error handling)
-    if (remaining.length > 0) {
-        // Deduplicate
-        const unique = new Map<string, { word: string; context: string }>();
-        for (const w of remaining) {
-            const k = w.word.toLowerCase().replace(/[^a-z'-]/g, '');
-            if (!unique.has(k)) unique.set(k, w);
-        }
-
-        const allWords = Array.from(unique.values());
-        const BATCH_SIZE = 15;
-
-        for (let i = 0; i < allWords.length; i += BATCH_SIZE) {
-            const batch = allWords.slice(i, i + BATCH_SIZE);
-
-            try {
-                const res = await fetch('/api/translate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ words: batch }),
-                });
-
-                if (res.ok) {
-                    const data = await res.json();
-                    if (Array.isArray(data.translations)) {
-                        for (const entry of data.translations) {
-                            if (entry.word && Array.isArray(entry.ja) && entry.ja.length > 0) {
-                                cache[entry.word.toLowerCase()] = entry.ja;
-                            }
-                        }
-                    }
-                } else {
-                    console.warn(`Translate API batch failed (${res.status}), using local only`);
-                }
-            } catch (err) {
-                console.warn('Translate API unavailable, using local dictionary only:', err);
-                // Don't break — continue with remaining batches
-            }
-
-            if (onProgress) {
-                onProgress(getTranslationCacheFlat());
-            }
-
-            // Rate limit delay
-            if (i + BATCH_SIZE < allWords.length) {
-                await new Promise(r => setTimeout(r, 2000));
-            }
         }
     }
 
@@ -135,12 +144,11 @@ export async function prefetchTranslations(
 }
 
 /**
- * Translate a single word on-demand (local first, then API fallback).
+ * Translate a single word from local dictionary (synchronous).
  */
-export async function translateSingleWord(
+export function translateSingleWord(
     word: string,
-    context: string
-): Promise<{ primary: string; alternatives?: string[] } | null> {
+): { primary: string; alternatives?: string[] } | null {
     const key = word.toLowerCase().replace(/[^a-z'-]/g, '');
 
     // Check cache first
@@ -150,36 +158,10 @@ export async function translateSingleWord(
 
     // Try local dictionary
     const local = lookupLocal(key);
-    if (local) {
+    if (local && local.length > 0) {
         cache[key] = local;
         return { primary: local[0], alternatives: local.slice(1) };
     }
 
-    // Fallback to Gemini API (with error handling)
-    try {
-        const res = await fetch('/api/translate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ words: [{ word, context: "" }] }),
-        });
-
-        if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data.translations) && data.translations.length > 0) {
-                const entry = data.translations[0];
-                if (entry.ja && entry.ja.length > 0) {
-                    cache[key] = entry.ja;
-                    return { primary: entry.ja[0], alternatives: entry.ja.slice(1) };
-                }
-            }
-        }
-    } catch {
-        // Silently fail — no translation available
-    }
-
     return null;
 }
-
-// Legacy exports (no longer used but kept for safety)
-export function getCachedDefinition(): string | null { return null; }
-export async function translateDefinition(): Promise<string | null> { return null; }

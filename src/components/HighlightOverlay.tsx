@@ -38,6 +38,8 @@ export default function HighlightOverlay({
                 const width = (word.bbox.x1 - word.bbox.x0) * scaleX;
                 const height = (word.bbox.y1 - word.bbox.y0) * scaleY;
 
+                const isLowConfidence = word.confidence < 60;
+
                 return (
                     <button
                         key={`${word.text}-${index}`}
@@ -54,7 +56,9 @@ export default function HighlightOverlay({
                             width,
                             height,
                             backgroundColor: isHighlighted ? style.bgColor : 'transparent',
-                            border: isHighlighted ? `1.5px solid ${style.borderColor}` : '1.5px solid transparent',
+                            border: isHighlighted
+                                ? `1.5px ${isLowConfidence ? 'dashed' : 'solid'} ${style.borderColor}`
+                                : '1.5px solid transparent',
                         }}
                         onClick={(e) => {
                             e.stopPropagation();

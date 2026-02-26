@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { OcrWord } from '@/src/lib/types';
 import { getHighlightStyle, getWordLevel, getLevelDescription } from '@/src/lib/wordLevels';
 import { translateSingleWord } from '@/src/lib/translationCache';
@@ -24,8 +24,6 @@ export default function WordPopup({
     positionMode = 'near'
 }: WordPopupProps) {
     const popupRef = useRef<HTMLDivElement>(null);
-    const [onDemandJa, setOnDemandJa] = useState<{ primary: string; alternatives?: string[] } | null>(null);
-    const [jaLoading, setJaLoading] = useState(false);
 
     const wordKey = word.text.toLowerCase().replace(/[^a-z'-]/g, '');
 
@@ -33,65 +31,17 @@ export default function WordPopup({
     const primaryJa = translationCache[`primary:${wordKey}`] || null;
     const altsJa = translationCache[`alts:${wordKey}`] || null;
 
-    // If not cached, fetch on demand
-    useEffect(() => {
-        if (primaryJa || onDemandJa) {
-            setJaLoading(false);
-            return;
-        }
+    // If not in cache, try synchronous local lookup
+    const localResult = (!primaryJa) ? translateSingleWord(word.text) : null;
 
-        let cancelled = false;
-        const fetch = async () => {
-            setJaLoading(true);
-            try {
-                // Safety timeout to prevent infinite loading
-                const timeoutPromise = new Promise<null>((resolve) =>
-                    setTimeout(() => resolve(null), 8000)
-                );
-
-                const result = await Promise.race([
-                    translateSingleWord(word.text, word.context || word.text),
-                    timeoutPromise
-                ]);
-
-                if (!cancelled && result) setOnDemandJa(result);
-            } catch (error) {
-                console.error("Translation fetch failed", error);
-            } finally {
-                if (!cancelled) setJaLoading(false);
-            }
-        };
-        fetch();
-        return () => { cancelled = true; };
-    }, [word.text, word.context, primaryJa, onDemandJa]);
-
-    // Clean definition helper
-    const cleanDef = (text: string | null) => {
-        if (!text) return null;
-        let cleaned = text
-            .replace(/[《〈〔（\(][^《〈〔（\(》〉〕）\)]*[》〉〕）\)]/g, '')
-            .replace(/[\[].*?[\]]/g, '')
-            .replace(/[『』]/g, '')
-            .replace(/[,，、]+/g, '、')
-            .replace(/^[、\s]+|[、\s]+$/g, '')
-            .trim();
-        return cleaned;
-    };
-
-    const rawPrimary = primaryJa || onDemandJa?.primary || null;
-    const rawAlts = altsJa ? altsJa.split(' / ') : onDemandJa?.alternatives || [];
-
-    const displayPrimary = cleanDef(rawPrimary);
-    const displayAlts = rawAlts
-        .map(cleanDef)
-        .filter((s): s is string => !!s && s.length > 0)
-        .slice(0, 3);
+    const displayPrimary = primaryJa || localResult?.primary || null;
+    const displayAlts = altsJa
+        ? altsJa.split(' / ')
+        : localResult?.alternatives || [];
 
     // Close handlers
     useEffect(() => {
         const handleClick = (e: MouseEvent) => {
-            // Note: with visualViewport scaling, checking contains might be tricky if events bubble differently
-            // But usually contains() works on DOM tree.
             if (popupRef.current && !popupRef.current.contains(e.target as Node)) onClose();
         };
         const handleKey = (e: KeyboardEvent) => {
@@ -110,15 +60,15 @@ export default function WordPopup({
     const levelDesc = level ? getLevelDescription(level) : null;
 
     // Visual Viewport Logic for Native Zoom stability
-    const [viewport, setViewport] = useState<{ scale: number; offsetLeft: number; offsetTop: number; width: number; height: number } | null>(null);
+    const [viewport, setViewport] = React.useState<{ scale: number; offsetLeft: number; offsetTop: number; width: number; height: number } | null>(null);
 
     useEffect(() => {
         const handler = () => {
             if (!window.visualViewport) return;
             setViewport({
                 scale: window.visualViewport.scale,
-                offsetLeft: window.visualViewport.offsetLeft, // or pageLeft
-                offsetTop: window.visualViewport.offsetTop,   // or pageTop
+                offsetLeft: window.visualViewport.offsetLeft,
+                offsetTop: window.visualViewport.offsetTop,
                 width: window.visualViewport.width,
                 height: window.visualViewport.height
             });
@@ -141,7 +91,7 @@ export default function WordPopup({
     // Layout Logic
     const isBottom = positionMode === 'bottom';
 
-    // Sizing (Base font size logic matching native zoom)
+    // Sizing
     let baseFontSize = 16;
     let titleFontSize = 18;
 
@@ -161,43 +111,32 @@ export default function WordPopup({
     const currentScale = viewport?.scale || 1;
 
     if (isBottom) {
-        // Bottom Fixed Mode: Use a full-screen wrapper and position absolutely to Visual Viewport
         overlayClass = "fixed inset-0 z-50 pointer-events-none overflow-hidden";
 
         if (isReady && viewport) {
             const vvBottom = viewport.offsetTop + viewport.height;
             const vvLeft = viewport.offsetLeft;
             const scaleFactor = 1 / viewport.scale;
-
-            // Width: content must be (viewport.width * viewport.scale) so that when scaled down by (1/scale), it equals viewport.width
-            // Wait: 
-            // Calculated Width * (1/scale) = Viewport Width
-            // Calculated Width = Viewport Width * scale
             const calculatedWidth = viewport.width * viewport.scale;
 
             popupStyle = {
                 position: 'absolute',
                 left: 0,
-                top: 0, // We use transform translate to move it
+                top: 0,
                 width: calculatedWidth,
                 transformOrigin: 'bottom left',
-                // Translate to Bottom-Left of Visual Viewport, Scale Down, Move Up by Height (100%)
                 transform: `translate(${vvLeft}px, ${vvBottom}px) translateY(-100%) scale(${scaleFactor})`,
                 pointerEvents: 'auto',
-                opacity: 1, // Ready
+                opacity: 1,
             };
         } else {
-            // Not ready or server side
             popupStyle = { opacity: 0 };
         }
 
     } else {
-        // Floating Mode
         const top = anchorRect.bottom + (8 / currentScale);
         const scaleFactor = 1 / currentScale;
 
-        // Clamp horizontal position within visual viewport bounds (not layout viewport)
-        // so the popup stays on-screen when pinch-zoomed on mobile
         const popupMaxHalfWidth = 140 / currentScale;
         let clampLeft: number, clampRight: number;
         if (viewport) {
@@ -225,9 +164,6 @@ export default function WordPopup({
         };
     }
 
-    // Don't use CSS animation classes (animate-in/fade-in) — their keyframes
-    // override the inline transform with scale(1), causing a flash of the
-    // full-size popup before the 1/scale correction is applied.
     const animationClass = "";
 
     return (
@@ -290,7 +226,7 @@ export default function WordPopup({
                                     </p>
                                     {displayAlts.length > 0 && (
                                         <div className="mt-2 space-y-1">
-                                            {displayAlts.map((alt, i) => (
+                                            {displayAlts.slice(0, 3).map((alt, i) => (
                                                 <p key={i} className="text-gray-400" style={{ fontSize: baseFontSize * 0.85 }}>
                                                     {alt}
                                                 </p>
@@ -298,13 +234,8 @@ export default function WordPopup({
                                         </div>
                                     )}
                                 </>
-                            ) : jaLoading ? (
-                                <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                                    <span className="text-sm text-gray-500">翻訳中...</span>
-                                </div>
                             ) : (
-                                <p className="text-sm text-gray-600">—</p>
+                                <p className="text-sm text-gray-500">辞書に未登録</p>
                             )}
                         </div>
 

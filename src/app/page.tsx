@@ -5,6 +5,7 @@ import ImageUploader from '@/src/components/ImageUploader';
 import HighlightOverlay from '@/src/components/HighlightOverlay';
 import WordPopup from '@/src/components/WordPopup';
 import UISettings, { PopupScaleMode, PopupPositionMode } from '@/src/components/UISettings';
+import WordListPanel from '@/src/components/WordListPanel';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { useOcr } from '@/src/components/OcrAnalyzer';
 import {
@@ -15,7 +16,7 @@ import {
     getHighlightStyle,
 } from '@/src/lib/wordLevels';
 import { OcrWord } from '@/src/lib/types';
-import { prefetchTranslations, clearTranslationCache, translateSingleWord } from '@/src/lib/translationCache';
+import { prefetchTranslations, clearTranslationCache } from '@/src/lib/translationCache';
 
 /** Rotate an image 90 degrees clockwise on a canvas */
 function rotateImage90CW(
@@ -55,7 +56,6 @@ export default function Home() {
 
     // Translation cache state
     const [translationCache, setTranslationCache] = useState<Record<string, string>>({});
-    const [isTranslating, setIsTranslating] = useState(false);
 
     // UI Settings State
     const [popupScaleMode, setPopupScaleMode] = useState<PopupScaleMode>('dynamic');
@@ -98,12 +98,10 @@ export default function Home() {
             const ocrResult = await analyze(dataUrl, userLevel);
             setWords(ocrResult.words);
 
-            setIsTranslating(true);
-            await prefetchTranslations(
-                ocrResult.words.map(w => ({ text: w.text, context: w.context })),
-                (updatedCache) => setTranslationCache({ ...updatedCache })
+            const finalCache = prefetchTranslations(
+                ocrResult.words.map(w => ({ text: w.text })),
             );
-            setIsTranslating(false);
+            setTranslationCache(finalCache);
         },
         [analyze, userLevel]
     );
@@ -133,12 +131,10 @@ export default function Home() {
         const ocrResult = await analyze(imageDataUrl, userLevel);
         setWords(ocrResult.words);
 
-        setIsTranslating(true);
-        await prefetchTranslations(
-            ocrResult.words.map(w => ({ text: w.text, context: w.context })),
-            (updatedCache) => setTranslationCache({ ...updatedCache })
+        const finalCache = prefetchTranslations(
+            ocrResult.words.map(w => ({ text: w.text })),
         );
-        setIsTranslating(false);
+        setTranslationCache(finalCache);
     }, [imageDataUrl, isAnalyzing, analyze, userLevel]);
 
     // Handle user level change — re-classify words dynamically
@@ -360,6 +356,9 @@ export default function Home() {
                     </div>
                 )}
 
+                {/* Word list panel */}
+                {words.length > 0 && <WordListPanel words={words} />}
+
                 {/* Legend */}
                 <div className="mt-10 p-5 bg-gray-900/60 border border-gray-800/60 rounded-xl">
                     <h3 className="text-sm font-semibold text-gray-300 mb-3">Color Legend</h3>
@@ -375,6 +374,10 @@ export default function Home() {
                         <div className="flex items-center gap-2">
                             <span className="w-5 h-5 rounded" style={{ backgroundColor: 'rgba(96, 165, 250, 0.3)', border: '1.5px solid rgba(96, 165, 250, 0.5)' }} />
                             <span className="text-gray-400">Recently learned</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded" style={{ backgroundColor: 'rgba(249, 115, 22, 0.25)', border: '1.5px dashed rgba(249, 115, 22, 0.5)' }} />
+                            <span className="text-gray-400">Low OCR confidence</span>
                         </div>
                     </div>
                 </div>
