@@ -10,6 +10,7 @@ interface HighlightOverlayProps {
     imageHeight: number;
     displayWidth: number;
     displayHeight: number;
+    skewAngle: number;
     onWordClick: (word: OcrWord, rect: DOMRect) => void;
 }
 
@@ -19,6 +20,7 @@ export default function HighlightOverlay({
     imageHeight,
     displayWidth,
     displayHeight,
+    skewAngle,
     onWordClick,
 }: HighlightOverlayProps) {
     const scaleX = displayWidth / imageWidth;
@@ -59,6 +61,7 @@ export default function HighlightOverlay({
                             border: isHighlighted
                                 ? `1.5px ${isLowConfidence ? 'dashed' : 'solid'} ${style.borderColor}`
                                 : '1.5px solid transparent',
+                            transform: skewAngle ? `rotate(${skewAngle}deg)` : undefined,
                         }}
                         onClick={(e) => {
                             e.stopPropagation();

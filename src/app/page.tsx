@@ -53,6 +53,7 @@ export default function Home() {
     // OCR state
     const { analyze, isAnalyzing, progress, error } = useOcr();
     const [words, setWords] = useState<OcrWord[]>([]);
+    const [skewAngle, setSkewAngle] = useState(0);
 
     // Translation cache state
     const [translationCache, setTranslationCache] = useState<Record<string, string>>({});
@@ -97,12 +98,7 @@ export default function Home() {
 
             const ocrResult = await analyze(dataUrl, userLevel);
             setWords(ocrResult.words);
-
-            // If deskewed, update displayed image and dimensions to match OCR coordinates
-            if (ocrResult.displayImageUrl) {
-                setImageDataUrl(ocrResult.displayImageUrl);
-                setImageNaturalSize({ width: ocrResult.ocrImageWidth, height: ocrResult.ocrImageHeight });
-            }
+            setSkewAngle(ocrResult.skewAngle);
 
             const finalCache = prefetchTranslations(
                 ocrResult.words.map(w => ({ text: w.text })),
@@ -136,12 +132,7 @@ export default function Home() {
 
         const ocrResult = await analyze(imageDataUrl, userLevel);
         setWords(ocrResult.words);
-
-        // If deskewed, update displayed image and dimensions to match OCR coordinates
-        if (ocrResult.displayImageUrl) {
-            setImageDataUrl(ocrResult.displayImageUrl);
-            setImageNaturalSize({ width: ocrResult.ocrImageWidth, height: ocrResult.ocrImageHeight });
-        }
+        setSkewAngle(ocrResult.skewAngle);
 
         const finalCache = prefetchTranslations(
             ocrResult.words.map(w => ({ text: w.text })),
@@ -318,6 +309,7 @@ export default function Home() {
                                     imageHeight={imageNaturalSize.height}
                                     displayWidth={imageDisplaySize.width}
                                     displayHeight={imageDisplaySize.height}
+                                    skewAngle={skewAngle}
                                     onWordClick={handleWordClick}
                                 />
                             )}

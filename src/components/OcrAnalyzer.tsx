@@ -292,8 +292,8 @@ function mergeFragmentedWords(words: RawWord[]): RawWord[] {
                 (next.bbox.x1 - next.bbox.x0) / Math.max(1, next.text.length);
             const avgCharW = (curCharW + nextCharW) / 2;
 
-            // Merge if gap is smaller than half a character width
-            if (gap < avgCharW * 0.5) {
+            // Merge only if gap is negligible (< 12% of character width) — true OCR splits
+            if (gap < avgCharW * 0.12) {
                 current = {
                     text: current.text + next.text,
                     bbox: {
@@ -317,11 +317,13 @@ function mergeFragmentedWords(words: RawWord[]): RawWord[] {
 }
 
 interface PreprocessResult {
-    ocrUrl: string;       // binarized image for OCR (with padding)
-    displayUrl: string;   // deskewed color image for display (or original if no skew)
-    width: number;        // width of display image (without padding)
-    height: number;       // height of display image (without padding)
-    padding: number;      // padding added around OCR image
+    ocrUrl: string;           // binarized image for OCR (with padding)
+    padding: number;          // padding added around OCR image
+    skewAngle: number;        // detected skew angle in degrees
+    originalWidth: number;    // original image dimensions
+    originalHeight: number;
+    deskewedWidth: number;    // deskewed image dimensions (= original if no skew)
+    deskewedHeight: number;
     wasDeskewed: boolean;
 }
 
@@ -354,13 +356,10 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
 
     // --- Detect and correct skew ---
     const skewAngle = detectSkewAngle(gray, w, h, threshold);
-    let displayUrl = imageUrl;
     let sourceUrl = imageUrl;
     let wasDeskewed = false;
     if (Math.abs(skewAngle) > 0.5) {
-        const rotatedUrl = rotateByAngle(img, -skewAngle);
-        displayUrl = rotatedUrl;
-        sourceUrl = rotatedUrl;
+        sourceUrl = rotateByAngle(img, -skewAngle);
         wasDeskewed = true;
     }
 
@@ -402,10 +401,12 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
 
     return {
         ocrUrl: paddedCanvas.toDataURL('image/png'),
-        displayUrl,
-        width: finalW,
-        height: finalH,
         padding: PADDING,
+        skewAngle,
+        originalWidth: w,
+        originalHeight: h,
+        deskewedWidth: finalW,
+        deskewedHeight: finalH,
         wasDeskewed,
     };
 }
@@ -461,8 +462,43 @@ export function useOcr(): UseOcrResult {
                 // Step 2: Merge word fragments split by OCR
                 const mergedWords = mergeFragmentedWords(ocrWords);
 
-                // Step 3: Clean text
-                const rawWords = mergedWords
+                // Step 3: Transform bboxes from deskewed space back to original image space
+                let finalWords: RawWord[] = mergedWords;
+                if (preprocess.wasDeskewed) {
+                    const s = preprocess.skewAngle * Math.PI / 180;
+                    const cosS = Math.cos(s);
+                    const sinS = Math.sin(s);
+                    const dCx = preprocess.deskewedWidth / 2;
+                    const dCy = preprocess.deskewedHeight / 2;
+                    const oCx = preprocess.originalWidth / 2;
+                    const oCy = preprocess.originalHeight / 2;
+
+                    finalWords = mergedWords.map((w) => {
+                        const bCx = (w.bbox.x0 + w.bbox.x1) / 2;
+                        const bCy = (w.bbox.y0 + w.bbox.y1) / 2;
+                        const bW = w.bbox.x1 - w.bbox.x0;
+                        const bH = w.bbox.y1 - w.bbox.y0;
+
+                        // Inverse rotation: deskewed center → original center
+                        const dx = bCx - dCx;
+                        const dy = bCy - dCy;
+                        const origCx = cosS * dx - sinS * dy + oCx;
+                        const origCy = sinS * dx + cosS * dy + oCy;
+
+                        return {
+                            ...w,
+                            bbox: {
+                                x0: origCx - bW / 2,
+                                y0: origCy - bH / 2,
+                                x1: origCx + bW / 2,
+                                y1: origCy + bH / 2,
+                            },
+                        };
+                    });
+                }
+
+                // Step 4: Clean text
+                const rawWords = finalWords
                     .map((w) => {
                         const text = w.text
                             .replace(/^[^a-zA-Z]+/, '')
@@ -508,14 +544,12 @@ export function useOcr(): UseOcrResult {
                 setProgress(100);
                 return {
                     words,
-                    displayImageUrl: preprocess.wasDeskewed ? preprocess.displayUrl : undefined,
-                    ocrImageWidth: preprocess.width,
-                    ocrImageHeight: preprocess.height,
+                    skewAngle: preprocess.wasDeskewed ? preprocess.skewAngle : 0,
                 };
             } catch (err) {
                 const msg = err instanceof Error ? err.message : 'OCR analysis failed';
                 setError(msg);
-                return { words: [], ocrImageWidth: 0, ocrImageHeight: 0 };
+                return { words: [], skewAngle: 0 };
             } finally {
                 if (worker) {
                     await worker.terminate();

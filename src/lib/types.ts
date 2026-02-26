@@ -17,11 +17,7 @@ export interface OcrWord {
 
 export interface OcrResult {
     words: OcrWord[];
-    /** Deskewed display image URL (if skew was corrected) */
-    displayImageUrl?: string;
-    /** Width of the image used for OCR (may differ from original if deskewed) */
-    ocrImageWidth: number;
-    /** Height of the image used for OCR (may differ from original if deskewed) */
-    ocrImageHeight: number;
+    /** Detected skew angle for tilting highlights (degrees, positive = clockwise tilt) */
+    skewAngle: number;
 }
 
