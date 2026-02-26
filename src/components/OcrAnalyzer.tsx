@@ -13,89 +13,294 @@ interface UseOcrResult {
 }
 
 /**
- * Preprocess an image for better OCR accuracy:
- * 1. Grayscale conversion
- * 2. Contrast enhancement via histogram stretch (min-max normalization)
- * 3. Otsu's method binarization
+ * Load an image URL into an HTMLImageElement.
  */
-function preprocessImage(imageUrl: string): Promise<string> {
+function loadImage(url: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.naturalWidth;
-            canvas.height = img.naturalHeight;
-            const ctx = canvas.getContext('2d')!;
-            ctx.drawImage(img, 0, 0);
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+    });
+}
 
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imageData.data;
-            const pixels = canvas.width * canvas.height;
+/**
+ * Convert image data to grayscale Uint8Array.
+ */
+function toGrayscale(data: Uint8ClampedArray, pixels: number): Uint8Array {
+    const gray = new Uint8Array(pixels);
+    for (let i = 0; i < pixels; i++) {
+        gray[i] = Math.round(0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]);
+    }
+    return gray;
+}
 
-            // Step 1: Convert to grayscale
-            const gray = new Uint8Array(pixels);
-            for (let i = 0; i < pixels; i++) {
-                const r = data[i * 4];
-                const g = data[i * 4 + 1];
-                const b = data[i * 4 + 2];
-                gray[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-            }
+/**
+ * Apply histogram stretch (min-max normalization) in-place.
+ */
+function histogramStretch(gray: Uint8Array): void {
+    let min = 255, max = 0;
+    for (let i = 0; i < gray.length; i++) {
+        if (gray[i] < min) min = gray[i];
+        if (gray[i] > max) max = gray[i];
+    }
+    const range = max - min || 1;
+    for (let i = 0; i < gray.length; i++) {
+        gray[i] = Math.round(((gray[i] - min) / range) * 255);
+    }
+}
 
-            // Step 2: Histogram stretch (min-max normalization)
-            let min = 255, max = 0;
-            for (let i = 0; i < pixels; i++) {
-                if (gray[i] < min) min = gray[i];
-                if (gray[i] > max) max = gray[i];
-            }
-            const range = max - min || 1;
-            for (let i = 0; i < pixels; i++) {
-                gray[i] = Math.round(((gray[i] - min) / range) * 255);
-            }
+/**
+ * Compute Otsu's threshold for a grayscale array.
+ */
+function otsuThreshold(gray: Uint8Array): number {
+    const pixels = gray.length;
+    const histogram = new Array(256).fill(0);
+    for (let i = 0; i < pixels; i++) histogram[gray[i]]++;
 
-            // Step 3: Otsu's threshold
-            const histogram = new Array(256).fill(0);
-            for (let i = 0; i < pixels; i++) {
-                histogram[gray[i]]++;
-            }
+    let sum = 0;
+    for (let i = 0; i < 256; i++) sum += i * histogram[i];
 
-            let sum = 0;
-            for (let i = 0; i < 256; i++) sum += i * histogram[i];
+    let sumB = 0, wB = 0, wF = 0;
+    let maxVariance = 0, threshold = 128;
 
-            let sumB = 0, wB = 0, wF = 0;
-            let maxVariance = 0, threshold = 128;
+    for (let t = 0; t < 256; t++) {
+        wB += histogram[t];
+        if (wB === 0) continue;
+        wF = pixels - wB;
+        if (wF === 0) break;
 
-            for (let t = 0; t < 256; t++) {
-                wB += histogram[t];
-                if (wB === 0) continue;
-                wF = pixels - wB;
-                if (wF === 0) break;
+        sumB += t * histogram[t];
+        const mB = sumB / wB;
+        const mF = (sum - sumB) / wF;
+        const variance = wB * wF * (mB - mF) * (mB - mF);
 
-                sumB += t * histogram[t];
-                const mB = sumB / wB;
-                const mF = (sum - sumB) / wF;
-                const variance = wB * wF * (mB - mF) * (mB - mF);
+        if (variance > maxVariance) {
+            maxVariance = variance;
+            threshold = t;
+        }
+    }
+    return threshold;
+}
 
-                if (variance > maxVariance) {
-                    maxVariance = variance;
-                    threshold = t;
+/**
+ * Detect skew angle using projection profile analysis.
+ *
+ * For each candidate angle, rotates the binary image and computes
+ * the horizontal projection profile (sum of black pixels per row).
+ * The angle that maximizes the variance of the profile is the one
+ * where text lines are most horizontal.
+ *
+ * Uses a downsampled image for performance.
+ */
+function detectSkewAngle(gray: Uint8Array, width: number, height: number, threshold: number): number {
+    // Downsample for speed — target max ~600px on longest side
+    const MAX_DIM = 600;
+    const scale = Math.min(1, MAX_DIM / Math.max(width, height));
+    const sw = Math.round(width * scale);
+    const sh = Math.round(height * scale);
+
+    // Build downsampled binary image (1 = text/dark, 0 = background/light)
+    const binary = new Uint8Array(sw * sh);
+    for (let y = 0; y < sh; y++) {
+        const srcY = Math.min(Math.round(y / scale), height - 1);
+        for (let x = 0; x < sw; x++) {
+            const srcX = Math.min(Math.round(x / scale), width - 1);
+            binary[y * sw + x] = gray[srcY * width + srcX] <= threshold ? 1 : 0;
+        }
+    }
+
+    const cx = sw / 2;
+    const cy = sh / 2;
+
+    // Scan angles from -15 to +15 degrees in 0.5° steps
+    const ANGLE_MIN = -15;
+    const ANGLE_MAX = 15;
+    const ANGLE_STEP = 0.5;
+
+    let bestAngle = 0;
+    let bestVariance = -1;
+
+    // Projection buffer reused across iterations
+    const projSize = Math.ceil(Math.sqrt(sw * sw + sh * sh));
+    const projection = new Float64Array(projSize);
+
+    for (let angleDeg = ANGLE_MIN; angleDeg <= ANGLE_MAX; angleDeg += ANGLE_STEP) {
+        const rad = (angleDeg * Math.PI) / 180;
+        const cosA = Math.cos(rad);
+        const sinA = Math.sin(rad);
+
+        // Clear projection
+        projection.fill(0);
+        let minRow = projSize, maxRow = 0;
+
+        // Rotate each text pixel and accumulate into horizontal projection
+        for (let y = 0; y < sh; y++) {
+            for (let x = 0; x < sw; x++) {
+                if (binary[y * sw + x] === 0) continue;
+                // Rotated y-coordinate determines the row in the projection
+                const ry = Math.round(-sinA * (x - cx) + cosA * (y - cy) + cy);
+                if (ry >= 0 && ry < projSize) {
+                    projection[ry]++;
+                    if (ry < minRow) minRow = ry;
+                    if (ry > maxRow) maxRow = ry;
                 }
             }
+        }
 
-            // Apply binarization and write back
-            for (let i = 0; i < pixels; i++) {
-                const val = gray[i] > threshold ? 255 : 0;
-                data[i * 4] = val;
-                data[i * 4 + 1] = val;
-                data[i * 4 + 2] = val;
-                // alpha stays unchanged
+        // Compute variance of the projection profile
+        const count = maxRow - minRow + 1;
+        if (count < 2) continue;
+
+        let sum = 0;
+        for (let r = minRow; r <= maxRow; r++) sum += projection[r];
+        const mean = sum / count;
+
+        let variance = 0;
+        for (let r = minRow; r <= maxRow; r++) {
+            const d = projection[r] - mean;
+            variance += d * d;
+        }
+        variance /= count;
+
+        if (variance > bestVariance) {
+            bestVariance = variance;
+            bestAngle = angleDeg;
+        }
+    }
+
+    // Refine with finer steps around the best angle (±1° in 0.1° steps)
+    const refineMin = bestAngle - 1;
+    const refineMax = bestAngle + 1;
+    for (let angleDeg = refineMin; angleDeg <= refineMax; angleDeg += 0.1) {
+        const rad = (angleDeg * Math.PI) / 180;
+        const cosA = Math.cos(rad);
+        const sinA = Math.sin(rad);
+
+        projection.fill(0);
+        let minRow = projSize, maxRow = 0;
+
+        for (let y = 0; y < sh; y++) {
+            for (let x = 0; x < sw; x++) {
+                if (binary[y * sw + x] === 0) continue;
+                const ry = Math.round(-sinA * (x - cx) + cosA * (y - cy) + cy);
+                if (ry >= 0 && ry < projSize) {
+                    projection[ry]++;
+                    if (ry < minRow) minRow = ry;
+                    if (ry > maxRow) maxRow = ry;
+                }
             }
+        }
 
-            ctx.putImageData(imageData, 0, 0);
-            resolve(canvas.toDataURL('image/png'));
-        };
-        img.onerror = reject;
-        img.src = imageUrl;
-    });
+        const count = maxRow - minRow + 1;
+        if (count < 2) continue;
+
+        let sum = 0;
+        for (let r = minRow; r <= maxRow; r++) sum += projection[r];
+        const mean = sum / count;
+
+        let variance = 0;
+        for (let r = minRow; r <= maxRow; r++) {
+            const d = projection[r] - mean;
+            variance += d * d;
+        }
+        variance /= count;
+
+        if (variance > bestVariance) {
+            bestVariance = variance;
+            bestAngle = angleDeg;
+        }
+    }
+
+    return bestAngle;
+}
+
+/**
+ * Rotate an image by a given angle (degrees) around its center.
+ * Returns a new canvas data URL.
+ */
+function rotateByAngle(img: HTMLImageElement, angleDeg: number): string {
+    const rad = (angleDeg * Math.PI) / 180;
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+
+    // Compute new bounding box after rotation
+    const cos = Math.abs(Math.cos(rad));
+    const sin = Math.abs(Math.sin(rad));
+    const newW = Math.ceil(w * cos + h * sin);
+    const newH = Math.ceil(w * sin + h * cos);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = newW;
+    canvas.height = newH;
+    const ctx = canvas.getContext('2d')!;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, newW, newH);
+
+    ctx.translate(newW / 2, newH / 2);
+    ctx.rotate(rad);
+    ctx.drawImage(img, -w / 2, -h / 2);
+
+    return canvas.toDataURL('image/png');
+}
+
+/**
+ * Preprocess an image for better OCR accuracy:
+ * 1. Grayscale conversion + contrast enhancement
+ * 2. Skew detection via projection profile analysis
+ * 3. Deskew rotation (if skew > 0.5°)
+ * 4. Otsu binarization on the deskewed image
+ */
+async function preprocessImage(imageUrl: string): Promise<string> {
+    const img = await loadImage(imageUrl);
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+
+    // --- Analyze grayscale to detect skew ---
+    const analysisCanvas = document.createElement('canvas');
+    analysisCanvas.width = w;
+    analysisCanvas.height = h;
+    const aCtx = analysisCanvas.getContext('2d')!;
+    aCtx.drawImage(img, 0, 0);
+
+    const aData = aCtx.getImageData(0, 0, w, h);
+    const pixels = w * h;
+    const gray = toGrayscale(aData.data, pixels);
+    histogramStretch(gray);
+    const threshold = otsuThreshold(gray);
+
+    // --- Detect and correct skew ---
+    const skewAngle = detectSkewAngle(gray, w, h, threshold);
+    let sourceUrl = imageUrl;
+    if (Math.abs(skewAngle) > 0.5) {
+        sourceUrl = rotateByAngle(img, -skewAngle);
+    }
+
+    // --- Binarize the (possibly deskewed) image ---
+    const finalImg = await loadImage(sourceUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = finalImg.naturalWidth;
+    canvas.height = finalImg.naturalHeight;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(finalImg, 0, 0);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const finalPixels = canvas.width * canvas.height;
+    const finalGray = toGrayscale(imageData.data, finalPixels);
+    histogramStretch(finalGray);
+    const finalThreshold = otsuThreshold(finalGray);
+
+    const data = imageData.data;
+    for (let i = 0; i < finalPixels; i++) {
+        const val = finalGray[i] > finalThreshold ? 255 : 0;
+        data[i * 4] = val;
+        data[i * 4 + 1] = val;
+        data[i * 4 + 2] = val;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+    return canvas.toDataURL('image/png');
 }
 
 export function useOcr(): UseOcrResult {
