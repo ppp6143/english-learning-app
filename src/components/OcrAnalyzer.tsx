@@ -84,49 +84,6 @@ function otsuThreshold(gray: Uint8Array): number {
 }
 
 /**
- * Adaptive binarization using integral image for fast local mean.
- * Unlike global Otsu, this handles shadows and uneven lighting by
- * comparing each pixel to the average brightness in its local window.
- */
-function adaptiveBinarize(gray: Uint8Array, width: number, height: number): Uint8Array {
-    // Window ≈ 1/8 of shorter side, at least 25, must be odd
-    let win = Math.max(25, Math.round(Math.min(width, height) / 8));
-    if (win % 2 === 0) win++;
-    const half = (win - 1) / 2;
-    const C = 10; // pixel must be this much darker than local mean to count as text
-
-    // Build integral image for O(1) per-pixel local sum
-    const w1 = width + 1;
-    const integral = new Float64Array(w1 * (height + 1));
-    for (let y = 0; y < height; y++) {
-        let rowSum = 0;
-        for (let x = 0; x < width; x++) {
-            rowSum += gray[y * width + x];
-            integral[(y + 1) * w1 + (x + 1)] = rowSum + integral[y * w1 + (x + 1)];
-        }
-    }
-
-    const out = new Uint8Array(width * height);
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-            const x0 = Math.max(0, x - half);
-            const y0 = Math.max(0, y - half);
-            const x1 = Math.min(width, x + half + 1);
-            const y1 = Math.min(height, y + half + 1);
-            const count = (x1 - x0) * (y1 - y0);
-            const sum =
-                integral[y1 * w1 + x1]
-                - integral[y0 * w1 + x1]
-                - integral[y1 * w1 + x0]
-                + integral[y0 * w1 + x0];
-            const localMean = sum / count;
-            out[y * width + x] = gray[y * width + x] < localMean - C ? 0 : 255;
-        }
-    }
-    return out;
-}
-
-/**
  * Detect skew angle using projection profile analysis.
  *
  * For each candidate angle, rotates the binary image and computes
@@ -435,13 +392,15 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
     const finalGray = toGrayscale(imageData.data, finalPixels);
     histogramStretch(finalGray);
 
-    // Adaptive binarization handles shadows and uneven lighting
-    const binaryPixels = adaptiveBinarize(finalGray, finalW, finalH);
+    // Write contrast-enhanced grayscale directly — skip binarization.
+    // Tesseract LSTM does its own internal preprocessing; explicit binarization
+    // can destroy shadow-area text and the large integral-image buffer (~24 MB)
+    // exceeds mobile browser memory limits.
     const data = imageData.data;
     for (let i = 0; i < finalPixels; i++) {
-        data[i * 4] = binaryPixels[i];
-        data[i * 4 + 1] = binaryPixels[i];
-        data[i * 4 + 2] = binaryPixels[i];
+        data[i * 4] = finalGray[i];
+        data[i * 4 + 1] = finalGray[i];
+        data[i * 4 + 2] = finalGray[i];
     }
 
     ctx.putImageData(imageData, 0, 0);
