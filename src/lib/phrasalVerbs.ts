@@ -379,6 +379,13 @@ export function lookupPhrasalVerb(phrase: string): PhrasalVerbEntry | null {
 }
 
 /**
+ * Return all phrasal verb dictionary keys (for autocomplete).
+ */
+export function getPhrasalVerbKeys(): string[] {
+    return Object.keys(PHRASAL_VERBS);
+}
+
+/**
  * Get related phrasal verbs for a given word (base verb lookup).
  */
 export function getRelatedPhrasalVerbs(word: string): PhrasalVerbEntry[] {

@@ -2,7 +2,7 @@
 
 import DICT from './localDictionary';
 import { getLemmatizedCandidates } from './lemmatizer';
-import { lookupPhrasalVerb } from './phrasalVerbs';
+import { lookupPhrasalVerb, getPhrasalVerbKeys } from './phrasalVerbs';
 
 type TranslationCache = Record<string, string[]>;
 
@@ -180,6 +180,75 @@ export function translateSingleWord(
     }
 
     return null;
+}
+
+// --- Autocomplete suggestions ---
+
+export interface Suggestion {
+    word: string;
+    translation: string;
+    source: 'dict' | 'phrasal';
+}
+
+/** Lazy-initialized sorted key arrays for autocomplete */
+let dictKeysCache: string[] | null = null;
+let phrasalKeysCache: string[] | null = null;
+
+function getDictKeys(): string[] {
+    if (!dictKeysCache) {
+        dictKeysCache = Object.keys(DICT).map(k => k.toLowerCase()).sort();
+    }
+    return dictKeysCache;
+}
+
+function getPhrasalKeys(): string[] {
+    if (!phrasalKeysCache) {
+        phrasalKeysCache = getPhrasalVerbKeys().sort();
+    }
+    return phrasalKeysCache;
+}
+
+/**
+ * Return autocomplete suggestions matching a prefix.
+ * Searches both the local dictionary and phrasal verb dictionary.
+ */
+export function getSuggestions(prefix: string, limit = 8): Suggestion[] {
+    const p = prefix.toLowerCase().trim();
+    if (p.length < 2) return [];
+
+    const results: Suggestion[] = [];
+    const seen = new Set<string>();
+
+    // Search phrasal verbs first (smaller set, high value)
+    for (const key of getPhrasalKeys()) {
+        if (key.startsWith(p)) {
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const pv = lookupPhrasalVerb(key);
+            if (pv) {
+                results.push({ word: key, translation: pv.translation, source: 'phrasal' });
+            }
+            if (results.length >= limit) return results;
+        }
+    }
+
+    // Search DICT keys
+    for (const key of getDictKeys()) {
+        if (key.startsWith(p)) {
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const entry = DICT[key] ?? DICT[key.charAt(0).toUpperCase() + key.slice(1)];
+            if (entry) {
+                const cleaned = cleanDictionaryEntry(entry);
+                if (cleaned.length > 0) {
+                    results.push({ word: key, translation: cleaned[0], source: 'dict' });
+                }
+            }
+            if (results.length >= limit) return results;
+        }
+    }
+
+    return results;
 }
 
 /**

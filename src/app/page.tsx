@@ -17,7 +17,7 @@ import {
     getWordLevel,
 } from '@/src/lib/wordLevels';
 import { OcrWord, OcrEngine } from '@/src/lib/types';
-import { prefetchTranslations, clearTranslationCache, translateSingleWord, translatePhrase } from '@/src/lib/translationCache';
+import { prefetchTranslations, clearTranslationCache, translateSingleWord, translatePhrase, getSuggestions, Suggestion } from '@/src/lib/translationCache';
 import { getRelatedPhrasalVerbs, PhrasalVerbEntry } from '@/src/lib/phrasalVerbs';
 import { decomposeWord, MorphemeDecomposition } from '@/src/lib/morphemeAnalyzer';
 
@@ -72,6 +72,10 @@ export default function Home() {
 
     // Manual search state
     const [searchInput, setSearchInput] = useState('');
+    const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+    const searchContainerRef = useRef<HTMLDivElement>(null);
     const [searchResult, setSearchResult] = useState<{
         word: string;
         level: string | null;
@@ -223,7 +227,44 @@ export default function Home() {
     const handleSearchClear = useCallback(() => {
         setSearchInput('');
         setSearchResult(null);
+        setSuggestions([]);
+        setShowSuggestions(false);
     }, []);
+
+    // Autocomplete: debounced suggestions
+    useEffect(() => {
+        if (searchInput.trim().length < 2) {
+            setSuggestions([]);
+            setShowSuggestions(false);
+            return;
+        }
+        const timer = setTimeout(() => {
+            const results = getSuggestions(searchInput.trim());
+            setSuggestions(results);
+            setShowSuggestions(results.length > 0);
+            setSelectedSuggestionIndex(-1);
+        }, 150);
+        return () => clearTimeout(timer);
+    }, [searchInput]);
+
+    // Autocomplete: click-outside handler
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+                setShowSuggestions(false);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    // Autocomplete: select a suggestion
+    const handleSelectSuggestion = useCallback((word: string) => {
+        setSearchInput(word);
+        setShowSuggestions(false);
+        setSuggestions([]);
+        handleSearch(word);
+    }, [handleSearch]);
 
     // Stats
     const highlightedWords = words.filter((w) => getHighlightStyle(w.difficulty).shouldHighlight);
@@ -346,24 +387,75 @@ export default function Home() {
                         {/* Manual word search bar */}
                         <div className="mb-4 flex flex-col gap-2">
                             <div className="flex items-center gap-2">
-                                <div className="relative flex-1">
+                                <div ref={searchContainerRef} className="relative flex-1">
                                     <input
                                         type="text"
                                         value={searchInput}
                                         onChange={(e) => setSearchInput(e.target.value)}
-                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                                        onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
+                                        onKeyDown={(e) => {
+                                            if (!showSuggestions || suggestions.length === 0) {
+                                                if (e.key === 'Enter') handleSearch();
+                                                return;
+                                            }
+                                            if (e.key === 'ArrowDown') {
+                                                e.preventDefault();
+                                                setSelectedSuggestionIndex(prev => prev < suggestions.length - 1 ? prev + 1 : 0);
+                                            } else if (e.key === 'ArrowUp') {
+                                                e.preventDefault();
+                                                setSelectedSuggestionIndex(prev => prev > 0 ? prev - 1 : suggestions.length - 1);
+                                            } else if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                if (selectedSuggestionIndex >= 0) {
+                                                    handleSelectSuggestion(suggestions[selectedSuggestionIndex].word);
+                                                } else {
+                                                    setShowSuggestions(false);
+                                                    handleSearch();
+                                                }
+                                            } else if (e.key === 'Escape') {
+                                                setShowSuggestions(false);
+                                            }
+                                        }}
                                         placeholder="Search a word..."
                                         className="w-full px-3 py-2 pr-8 text-sm bg-gray-900 border border-gray-700 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/30"
+                                        autoComplete="off"
                                     />
                                     {searchInput && (
                                         <button
                                             onClick={handleSearchClear}
-                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 z-10"
                                         >
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                             </svg>
                                         </button>
+                                    )}
+                                    {/* Autocomplete dropdown */}
+                                    {showSuggestions && suggestions.length > 0 && (
+                                        <ul className="absolute top-full left-0 right-0 z-50 mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-xl shadow-black/40 overflow-hidden">
+                                            {suggestions.map((s, i) => (
+                                                <li
+                                                    key={s.word + s.source}
+                                                    onMouseDown={(e) => { e.preventDefault(); handleSelectSuggestion(s.word); }}
+                                                    onMouseEnter={() => setSelectedSuggestionIndex(i)}
+                                                    className={`flex items-center justify-between px-3 py-2 text-sm cursor-pointer transition-colors ${
+                                                        i === selectedSuggestionIndex
+                                                            ? 'bg-gray-800 text-amber-300'
+                                                            : 'text-gray-300 hover:bg-gray-800/60'
+                                                    }`}
+                                                >
+                                                    <span className="flex items-center gap-2 min-w-0">
+                                                        <span className="font-medium whitespace-nowrap">{s.word}</span>
+                                                        {s.source === 'phrasal' && (
+                                                            <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-blue-900/50 text-blue-300 border border-blue-700/50 shrink-0">
+                                                                句動詞
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                    <span className="text-xs text-gray-500 truncate ml-3 max-w-[50%] text-right">{s.translation}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
                                     )}
                                 </div>
                                 <button
