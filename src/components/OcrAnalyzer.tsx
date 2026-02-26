@@ -320,11 +320,12 @@ interface PreprocessResult {
     ocrUrl: string;           // binarized image for OCR (with padding)
     padding: number;          // padding added around OCR image
     skewAngle: number;        // detected skew angle in degrees
-    originalWidth: number;    // original image dimensions
-    originalHeight: number;
-    deskewedWidth: number;    // deskewed image dimensions (= original if no skew)
+    processedWidth: number;   // downsampled original dimensions (for inverse rotation)
+    processedHeight: number;
+    deskewedWidth: number;    // deskewed image dimensions (= processed if no skew)
     deskewedHeight: number;
     wasDeskewed: boolean;
+    coordScale: number;       // multiply bboxes by this to get full-res coords (1 if no downsampling)
 }
 
 /**
@@ -337,16 +338,24 @@ interface PreprocessResult {
  * Returns both the binarized OCR image and the deskewed display image.
  */
 async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
-    const img = await loadImage(imageUrl);
-    const w = img.naturalWidth;
-    const h = img.naturalHeight;
+    const origImg = await loadImage(imageUrl);
+    const fullW = origImg.naturalWidth;
+    const fullH = origImg.naturalHeight;
+
+    // Downsample large images to avoid mobile canvas memory limits
+    // Phone photos (4032×3024+) easily exceed mobile GPU memory budgets
+    const MAX_OCR_DIM = 2000;
+    const dsRatio = Math.min(1, MAX_OCR_DIM / Math.max(fullW, fullH));
+    const w = Math.round(fullW * dsRatio);
+    const h = Math.round(fullH * dsRatio);
+    const coordScale = 1 / dsRatio; // to scale bboxes back to full resolution
 
     // --- Analyze grayscale to detect skew ---
     const analysisCanvas = document.createElement('canvas');
     analysisCanvas.width = w;
     analysisCanvas.height = h;
     const aCtx = analysisCanvas.getContext('2d')!;
-    aCtx.drawImage(img, 0, 0);
+    aCtx.drawImage(origImg, 0, 0, w, h);
 
     const aData = aCtx.getImageData(0, 0, w, h);
     const pixels = w * h;
@@ -356,15 +365,20 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
 
     // --- Detect and correct skew ---
     const skewAngle = detectSkewAngle(gray, w, h, threshold);
-    let sourceUrl = imageUrl;
     let wasDeskewed = false;
+    // For deskew rotation, use the downsampled canvas (not full-res image)
+    let deskewSource: HTMLImageElement;
     if (Math.abs(skewAngle) > 0.5) {
-        sourceUrl = rotateByAngle(img, -skewAngle);
+        const dsImg = await loadImage(analysisCanvas.toDataURL('image/jpeg', 0.85));
+        const rotatedUrl = rotateByAngle(dsImg, -skewAngle);
+        deskewSource = await loadImage(rotatedUrl);
         wasDeskewed = true;
+    } else {
+        deskewSource = await loadImage(analysisCanvas.toDataURL('image/jpeg', 0.85));
     }
 
     // --- Binarize the (possibly deskewed) image ---
-    const finalImg = await loadImage(sourceUrl);
+    const finalImg = deskewSource;
     const finalW = finalImg.naturalWidth;
     const finalH = finalImg.naturalHeight;
     const canvas = document.createElement('canvas');
@@ -403,11 +417,12 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
         ocrUrl: paddedCanvas.toDataURL('image/png'),
         padding: PADDING,
         skewAngle,
-        originalWidth: w,
-        originalHeight: h,
+        processedWidth: w,
+        processedHeight: h,
         deskewedWidth: finalW,
         deskewedHeight: finalH,
         wasDeskewed,
+        coordScale,
     };
 }
 
@@ -470,8 +485,8 @@ export function useOcr(): UseOcrResult {
                     const sinS = Math.sin(s);
                     const dCx = preprocess.deskewedWidth / 2;
                     const dCy = preprocess.deskewedHeight / 2;
-                    const oCx = preprocess.originalWidth / 2;
-                    const oCy = preprocess.originalHeight / 2;
+                    const oCx = preprocess.processedWidth / 2;
+                    const oCy = preprocess.processedHeight / 2;
 
                     finalWords = mergedWords.map((w) => {
                         const bCx = (w.bbox.x0 + w.bbox.x1) / 2;
@@ -479,7 +494,7 @@ export function useOcr(): UseOcrResult {
                         const bW = w.bbox.x1 - w.bbox.x0;
                         const bH = w.bbox.y1 - w.bbox.y0;
 
-                        // Inverse rotation: deskewed center → original center
+                        // Inverse rotation: deskewed center → processed-original center
                         const dx = bCx - dCx;
                         const dy = bCy - dCy;
                         const origCx = cosS * dx - sinS * dy + oCx;
@@ -497,7 +512,21 @@ export function useOcr(): UseOcrResult {
                     });
                 }
 
-                // Step 4: Clean text
+                // Step 4: Scale bboxes from processed coords to full-resolution original
+                const cs = preprocess.coordScale;
+                if (cs !== 1) {
+                    finalWords = finalWords.map((w) => ({
+                        ...w,
+                        bbox: {
+                            x0: w.bbox.x0 * cs,
+                            y0: w.bbox.y0 * cs,
+                            x1: w.bbox.x1 * cs,
+                            y1: w.bbox.y1 * cs,
+                        },
+                    }));
+                }
+
+                // Step 5: Clean text
                 const rawWords = finalWords
                     .map((w) => {
                         const text = w.text
