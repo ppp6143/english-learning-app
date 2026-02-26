@@ -352,39 +352,9 @@ export default function Home() {
                     </div>
                 )}
 
-                {/* Image display with overlay */}
-                {imageDataUrl && (
-                    <div className="mt-6">
-                        {/* Stats bar */}
-                        {words.length > 0 && (
-                            <div className="mb-4 flex flex-wrap items-center gap-3 text-xs">
-                                <span className="text-gray-500">{words.length} words detected</span>
-                                <span className="text-gray-700">|</span>
-                                {aboveCount > 0 && (
-                                    <span className="flex items-center gap-1.5">
-                                        <span className="w-2.5 h-2.5 rounded-full bg-orange-500/70" />
-                                        <span className="text-gray-400">{aboveCount} above level</span>
-                                    </span>
-                                )}
-                                {atCount > 0 && (
-                                    <span className="flex items-center gap-1.5">
-                                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-400/70" />
-                                        <span className="text-gray-400">{atCount} at level</span>
-                                    </span>
-                                )}
-                                {belowCount > 0 && (
-                                    <span className="flex items-center gap-1.5">
-                                        <span className="w-2.5 h-2.5 rounded-full bg-blue-400/50" />
-                                        <span className="text-gray-400">{belowCount} recently learned</span>
-                                    </span>
-                                )}
-                                {highlightedWords.length === 0 && (
-                                    <span className="text-gray-500">No highlighted words</span>
-                                )}
-                            </div>
-                        )}
-
-                        {/* Manual word search bar */}
+                {/* Manual word search bar — always visible */}
+                <div className="mt-6">
+                    {/* Manual word search bar */}
                         <div className="mb-4 flex flex-col gap-2">
                             <div className="flex items-center gap-2">
                                 <div ref={searchContainerRef} className="relative flex-1">
@@ -540,6 +510,39 @@ export default function Home() {
                                 </div>
                             )}
                         </div>
+                </div>
+
+                {/* Image display with overlay */}
+                {imageDataUrl && (
+                    <div className="mt-4">
+                        {/* Stats bar */}
+                        {words.length > 0 && (
+                            <div className="mb-4 flex flex-wrap items-center gap-3 text-xs">
+                                <span className="text-gray-500">{words.length} words detected</span>
+                                <span className="text-gray-700">|</span>
+                                {aboveCount > 0 && (
+                                    <span className="flex items-center gap-1.5">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-orange-500/70" />
+                                        <span className="text-gray-400">{aboveCount} above level</span>
+                                    </span>
+                                )}
+                                {atCount > 0 && (
+                                    <span className="flex items-center gap-1.5">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-400/70" />
+                                        <span className="text-gray-400">{atCount} at level</span>
+                                    </span>
+                                )}
+                                {belowCount > 0 && (
+                                    <span className="flex items-center gap-1.5">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-blue-400/50" />
+                                        <span className="text-gray-400">{belowCount} recently learned</span>
+                                    </span>
+                                )}
+                                {highlightedWords.length === 0 && (
+                                    <span className="text-gray-500">No highlighted words</span>
+                                )}
+                            </div>
+                        )}
 
                         {/* Image container */}
                         <div
