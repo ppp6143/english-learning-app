@@ -88,6 +88,11 @@ export function cleanDictionaryEntry(entries: string[]): string[] {
     return result;
 }
 
+/** Convert "australia" → "Australia" */
+function toTitleCase(s: string): string {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 /**
  * Look up a word in the local dictionary (tries lemmatized forms too).
  */
@@ -95,13 +100,23 @@ function lookupLocal(word: string): string[] | null {
     const w = word.toLowerCase().replace(/[^a-z'-]/g, '');
     if (!w) return null;
 
-    // Direct lookup
+    // Direct lookup (lowercase)
     if (DICT[w]) return cleanDictionaryEntry(DICT[w]);
 
-    // Try lemmatized candidates
+    // Try title case (e.g. "Australia", "Africa")
+    const tc = toTitleCase(w);
+    if (DICT[tc]) return cleanDictionaryEntry(DICT[tc]);
+
+    // Try original form as-is
+    const raw = word.replace(/[^a-zA-Z'-]/g, '');
+    if (raw && raw !== w && raw !== tc && DICT[raw]) return cleanDictionaryEntry(DICT[raw]);
+
+    // Try lemmatized candidates (lowercase + title case)
     const candidates = getLemmatizedCandidates(w);
     for (const c of candidates) {
         if (DICT[c]) return cleanDictionaryEntry(DICT[c]);
+        const ctc = toTitleCase(c);
+        if (DICT[ctc]) return cleanDictionaryEntry(DICT[ctc]);
     }
 
     return null;

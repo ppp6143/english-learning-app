@@ -98,6 +98,12 @@ export function getWordLevel(word: string): CEFRLevel | null {
         return 'C2';
     }
 
+    // Try title case for proper nouns (e.g. "Australia", "Africa")
+    const titleCased = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    if (titleCased !== normalized && titleCased in DICT) {
+        return 'C2';
+    }
+
     return null;
 }
 

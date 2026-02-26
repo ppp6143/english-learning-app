@@ -14,9 +14,10 @@ import {
     getLevelDescription,
     getRelativeDifficulty,
     getHighlightStyle,
+    getWordLevel,
 } from '@/src/lib/wordLevels';
 import { OcrWord, OcrEngine } from '@/src/lib/types';
-import { prefetchTranslations, clearTranslationCache } from '@/src/lib/translationCache';
+import { prefetchTranslations, clearTranslationCache, translateSingleWord } from '@/src/lib/translationCache';
 
 /** Rotate an image 90 degrees clockwise on a canvas */
 function rotateImage90CW(
@@ -66,6 +67,14 @@ export default function Home() {
     // Popup state
     const [selectedWord, setSelectedWord] = useState<OcrWord | null>(null);
     const [popupAnchor, setPopupAnchor] = useState<DOMRect | null>(null);
+
+    // Manual search state
+    const [searchInput, setSearchInput] = useState('');
+    const [searchResult, setSearchResult] = useState<{
+        word: string;
+        level: string | null;
+        translation: string | null;
+    } | null>(null);
 
     // Update display size on resize
     const updateDisplaySize = useCallback(() => {
@@ -168,6 +177,24 @@ export default function Home() {
     const handleImageLoad = useCallback(() => {
         updateDisplaySize();
     }, [updateDisplaySize]);
+
+    // Manual search
+    const handleSearch = useCallback(() => {
+        const q = searchInput.trim();
+        if (!q) return;
+        const level = getWordLevel(q);
+        const tr = translateSingleWord(q);
+        setSearchResult({
+            word: q,
+            level: level,
+            translation: tr ? tr.primary : null,
+        });
+    }, [searchInput]);
+
+    const handleSearchClear = useCallback(() => {
+        setSearchInput('');
+        setSearchResult(null);
+    }, []);
 
     // Stats
     const highlightedWords = words.filter((w) => getHighlightStyle(w.difficulty).shouldHighlight);
@@ -287,6 +314,57 @@ export default function Home() {
                             </div>
                         )}
 
+                        {/* Manual word search bar */}
+                        <div className="mb-4 flex flex-col gap-2">
+                            <div className="flex items-center gap-2">
+                                <div className="relative flex-1">
+                                    <input
+                                        type="text"
+                                        value={searchInput}
+                                        onChange={(e) => setSearchInput(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                                        placeholder="Search a word..."
+                                        className="w-full px-3 py-2 pr-8 text-sm bg-gray-900 border border-gray-700 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/30"
+                                    />
+                                    {searchInput && (
+                                        <button
+                                            onClick={handleSearchClear}
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    )}
+                                </div>
+                                <button
+                                    onClick={handleSearch}
+                                    className="px-3 py-2 text-sm rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-amber-300 transition-all duration-200"
+                                >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            {searchResult && (
+                                <div className="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm">
+                                    {searchResult.translation ? (
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="font-semibold text-amber-300">{searchResult.word}</span>
+                                            {searchResult.level && (
+                                                <span className="px-1.5 py-0.5 text-xs font-bold rounded bg-gray-700 text-gray-300">
+                                                    {searchResult.level}
+                                                </span>
+                                            )}
+                                            <span className="text-gray-400">{searchResult.translation}</span>
+                                        </div>
+                                    ) : (
+                                        <span className="text-gray-500">Not found in dictionary</span>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
                         {/* Image container */}
                         <div
                             ref={containerRef}
@@ -323,6 +401,7 @@ export default function Home() {
                                     setImageDataUrl(null);
                                     setWords([]);
                                     setSelectedWord(null);
+                                    handleSearchClear();
                                 }}
                                 className="px-4 py-2 text-sm rounded-lg border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-all duration-200"
                             >
