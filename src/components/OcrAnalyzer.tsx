@@ -2,11 +2,11 @@
 
 import { useCallback, useState } from 'react';
 import { createWorker, Worker, PSM } from 'tesseract.js';
-import { OcrWord, OcrResult } from '@/src/lib/types';
+import { OcrWord, OcrResult, OcrEngine } from '@/src/lib/types';
 import { CEFRLevel, getWordLevelAsync, getRelativeDifficulty } from '@/src/lib/wordLevels';
 
 interface UseOcrResult {
-    analyze: (imageUrl: string, userLevel: CEFRLevel) => Promise<OcrResult>;
+    analyze: (imageUrl: string, userLevel: CEFRLevel, engine?: OcrEngine) => Promise<OcrResult>;
     isAnalyzing: boolean;
     progress: number;
     error: string | null;
@@ -47,6 +47,186 @@ function histogramStretch(gray: Uint8Array): void {
     const range = max - min || 1;
     for (let i = 0; i < gray.length; i++) {
         gray[i] = Math.round(((gray[i] - min) / range) * 255);
+    }
+}
+
+/**
+ * Separable 2-pass box blur (horizontal then vertical), modifies src in-place.
+ */
+function boxBlur(src: Uint8Array, w: number, h: number, radius: number): void {
+    const len = w * h;
+    const tmp = new Uint8Array(len);
+    const diam = radius * 2 + 1;
+
+    // Horizontal pass -> tmp
+    for (let y = 0; y < h; y++) {
+        let sum = 0;
+        const off = y * w;
+        for (let x = -radius; x <= radius; x++) {
+            sum += src[off + Math.max(0, Math.min(x, w - 1))];
+        }
+        tmp[off] = (sum / diam) | 0;
+        for (let x = 1; x < w; x++) {
+            sum += src[off + Math.min(x + radius, w - 1)] - src[off + Math.max(x - radius - 1, 0)];
+            tmp[off + x] = (sum / diam) | 0;
+        }
+    }
+
+    // Vertical pass -> src
+    for (let x = 0; x < w; x++) {
+        let sum = 0;
+        for (let y = -radius; y <= radius; y++) {
+            sum += tmp[Math.max(0, Math.min(y, h - 1)) * w + x];
+        }
+        src[x] = (sum / diam) | 0;
+        for (let y = 1; y < h; y++) {
+            sum += tmp[Math.min(y + radius, h - 1) * w + x] - tmp[Math.max(y - radius - 1, 0) * w + x];
+            src[y * w + x] = (sum / diam) | 0;
+        }
+    }
+}
+
+/**
+ * Estimate background illumination via downsampled blur and divide it out.
+ * Handles uneven lighting / shadows from phone photos.
+ * Memory: ~2 * (w/16)*(h/16) bytes for downsampled buffers.
+ */
+function estimateAndRemoveBackground(gray: Uint8Array, w: number, h: number): void {
+    const factor = 16;
+    const sw = Math.max(1, (w / factor) | 0);
+    const sh = Math.max(1, (h / factor) | 0);
+    const small = new Uint8Array(sw * sh);
+
+    // Nearest-neighbour downsample
+    for (let sy = 0; sy < sh; sy++) {
+        const srcY = Math.min(((sy * h) / sh) | 0, h - 1);
+        for (let sx = 0; sx < sw; sx++) {
+            const srcX = Math.min(((sx * w) / sw) | 0, w - 1);
+            small[sy * sw + sx] = gray[srcY * w + srcX];
+        }
+    }
+
+    // Heavy blur on the small image to get a smooth background
+    const blurRadius = Math.max(2, Math.min(sw, sh) >> 2);
+    boxBlur(small, sw, sh, blurRadius);
+
+    // Divide original by bilinear-upsampled background
+    for (let y = 0; y < h; y++) {
+        const fy = (y * (sh - 1)) / Math.max(1, h - 1);
+        const y0 = Math.min(fy | 0, sh - 2);
+        const y1 = y0 + 1;
+        const wy = fy - y0;
+
+        for (let x = 0; x < w; x++) {
+            const fx = (x * (sw - 1)) / Math.max(1, w - 1);
+            const x0 = Math.min(fx | 0, sw - 2);
+            const x1 = x0 + 1;
+            const wx = fx - x0;
+
+            // Bilinear interpolation of background
+            const bg =
+                small[y0 * sw + x0] * (1 - wx) * (1 - wy) +
+                small[y0 * sw + x1] * wx * (1 - wy) +
+                small[y1 * sw + x0] * (1 - wx) * wy +
+                small[y1 * sw + x1] * wx * wy;
+
+            const idx = y * w + x;
+            const val = bg > 0 ? (gray[idx] / bg) * 200 : gray[idx];
+            gray[idx] = val < 0 ? 0 : val > 255 ? 255 : val | 0;
+        }
+    }
+}
+
+/**
+ * Contrast-Limited Adaptive Histogram Equalization (CLAHE).
+ * Divides the image into tiles and applies clipped histogram equalization
+ * with bilinear interpolation between tiles for smooth output.
+ * Memory: ~tilesX*tilesY*256*4 bytes for CDF table.
+ */
+function applyCLAHE(
+    gray: Uint8Array,
+    w: number,
+    h: number,
+    tilesX = 8,
+    tilesY = 8,
+    clipLimit = 2.0,
+): void {
+    const bins = 256;
+    const cdfs = new Float32Array(tilesY * tilesX * bins);
+    const tileW = w / tilesX;
+    const tileH = h / tilesY;
+
+    for (let ty = 0; ty < tilesY; ty++) {
+        for (let tx = 0; tx < tilesX; tx++) {
+            const x0 = Math.round(tx * tileW);
+            const y0 = Math.round(ty * tileH);
+            const x1 = Math.round((tx + 1) * tileW);
+            const y1 = Math.round((ty + 1) * tileH);
+            const tilePixels = (x1 - x0) * (y1 - y0);
+            if (tilePixels === 0) continue;
+
+            // Build histogram
+            const hist = new Uint32Array(bins);
+            for (let y = y0; y < y1; y++) {
+                for (let x = x0; x < x1; x++) {
+                    hist[gray[y * w + x]]++;
+                }
+            }
+
+            // Clip histogram
+            const clip = Math.max(1, (clipLimit * tilePixels) / bins) | 0;
+            let excess = 0;
+            for (let i = 0; i < bins; i++) {
+                if (hist[i] > clip) {
+                    excess += hist[i] - clip;
+                    hist[i] = clip;
+                }
+            }
+
+            // Redistribute excess evenly
+            const bonus = (excess / bins) | 0;
+            const remainder = excess - bonus * bins;
+            for (let i = 0; i < bins; i++) {
+                hist[i] += bonus + (i < remainder ? 1 : 0);
+            }
+
+            // Build CDF normalized to 0..255
+            const cdfOff = (ty * tilesX + tx) * bins;
+            let cumSum = 0;
+            for (let i = 0; i < bins; i++) {
+                cumSum += hist[i];
+                cdfs[cdfOff + i] = (cumSum / tilePixels) * 255;
+            }
+        }
+    }
+
+    // Map each pixel using bilinear interpolation of surrounding tile CDFs
+    for (let y = 0; y < h; y++) {
+        const fy = (y / tileH) - 0.5;
+        const ty0 = Math.max(0, Math.min(fy | 0, tilesY - 2));
+        const ty1 = ty0 + 1;
+        const wy = Math.max(0, Math.min(fy - ty0, 1));
+
+        for (let x = 0; x < w; x++) {
+            const fx = (x / tileW) - 0.5;
+            const tx0 = Math.max(0, Math.min(fx | 0, tilesX - 2));
+            const tx1 = tx0 + 1;
+            const wx = Math.max(0, Math.min(fx - tx0, 1));
+
+            const idx = y * w + x;
+            const val = gray[idx];
+
+            const c00 = cdfs[(ty0 * tilesX + tx0) * bins + val];
+            const c10 = cdfs[(ty0 * tilesX + tx1) * bins + val];
+            const c01 = cdfs[(ty1 * tilesX + tx0) * bins + val];
+            const c11 = cdfs[(ty1 * tilesX + tx1) * bins + val];
+
+            const top = c00 * (1 - wx) + c10 * wx;
+            const bot = c01 * (1 - wx) + c11 * wx;
+            const result = top * (1 - wy) + bot * wy;
+
+            gray[idx] = result < 0 ? 0 : result > 255 ? 255 : result | 0;
+        }
     }
 }
 
@@ -331,11 +511,13 @@ interface PreprocessResult {
 /**
  * Preprocess an image for better OCR accuracy:
  * 1. Grayscale conversion + contrast enhancement
- * 2. Skew detection via projection profile analysis
- * 3. Deskew rotation (if skew > 0.5°)
- * 4. Otsu binarization on the deskewed image
+ * 2. Shadow removal via background estimation
+ * 3. CLAHE for local contrast enhancement
+ * 4. Skew detection via projection profile analysis
+ * 5. Deskew rotation (if skew > 0.5°)
+ * 6. Second-pass shadow removal + CLAHE on deskewed image
  *
- * Returns both the binarized OCR image and the deskewed display image.
+ * Returns both the enhanced OCR image and the deskewed display image.
  */
 async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
     const origImg = await loadImage(imageUrl);
@@ -361,6 +543,8 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
     const pixels = w * h;
     const gray = toGrayscale(aData.data, pixels);
     histogramStretch(gray);
+    estimateAndRemoveBackground(gray, w, h);
+    applyCLAHE(gray, w, h);
     const threshold = otsuThreshold(gray);
 
     // --- Detect and correct skew ---
@@ -377,7 +561,7 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
         deskewSource = await loadImage(analysisCanvas.toDataURL('image/jpeg', 0.85));
     }
 
-    // --- Binarize the (possibly deskewed) image ---
+    // --- Enhance the (possibly deskewed) image ---
     const finalImg = deskewSource;
     const finalW = finalImg.naturalWidth;
     const finalH = finalImg.naturalHeight;
@@ -391,6 +575,8 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
     const finalPixels = finalW * finalH;
     const finalGray = toGrayscale(imageData.data, finalPixels);
     histogramStretch(finalGray);
+    estimateAndRemoveBackground(finalGray, finalW, finalH);
+    applyCLAHE(finalGray, finalW, finalH);
 
     // Write contrast-enhanced grayscale directly — skip binarization.
     // Tesseract LSTM does its own internal preprocessing; explicit binarization
@@ -428,13 +614,190 @@ async function preprocessImage(imageUrl: string): Promise<PreprocessResult> {
     };
 }
 
+/**
+ * Shared post-processing: merge fragments, inverse rotation, coord scaling,
+ * text cleaning, and word-level classification.
+ */
+async function postProcessWords(
+    rawWords: RawWord[],
+    preprocess: PreprocessResult,
+    userLevel: CEFRLevel,
+): Promise<OcrResult> {
+    // Merge word fragments split by OCR
+    const mergedWords = mergeFragmentedWords(rawWords);
+
+    // Transform bboxes from deskewed space back to original image space
+    let finalWords: RawWord[] = mergedWords;
+    if (preprocess.wasDeskewed) {
+        const s = preprocess.skewAngle * Math.PI / 180;
+        const cosS = Math.cos(s);
+        const sinS = Math.sin(s);
+        const dCx = preprocess.deskewedWidth / 2;
+        const dCy = preprocess.deskewedHeight / 2;
+        const oCx = preprocess.processedWidth / 2;
+        const oCy = preprocess.processedHeight / 2;
+
+        finalWords = mergedWords.map((w) => {
+            const bCx = (w.bbox.x0 + w.bbox.x1) / 2;
+            const bCy = (w.bbox.y0 + w.bbox.y1) / 2;
+            const bW = w.bbox.x1 - w.bbox.x0;
+            const bH = w.bbox.y1 - w.bbox.y0;
+
+            // Inverse rotation: deskewed center -> processed-original center
+            const dx = bCx - dCx;
+            const dy = bCy - dCy;
+            const origCx = cosS * dx - sinS * dy + oCx;
+            const origCy = sinS * dx + cosS * dy + oCy;
+
+            return {
+                ...w,
+                bbox: {
+                    x0: origCx - bW / 2,
+                    y0: origCy - bH / 2,
+                    x1: origCx + bW / 2,
+                    y1: origCy + bH / 2,
+                },
+            };
+        });
+    }
+
+    // Scale bboxes from processed coords to full-resolution original
+    const cs = preprocess.coordScale;
+    if (cs !== 1) {
+        finalWords = finalWords.map((w) => ({
+            ...w,
+            bbox: {
+                x0: w.bbox.x0 * cs,
+                y0: w.bbox.y0 * cs,
+                x1: w.bbox.x1 * cs,
+                y1: w.bbox.y1 * cs,
+            },
+        }));
+    }
+
+    // Clean text
+    const cleanedWords = finalWords
+        .map((w) => {
+            const text = w.text
+                .replace(/^[^a-zA-Z]+/, '')
+                .replace(/[^a-zA-Z]+$/, '')
+                .replace(/[^a-zA-Z'-]/g, '');
+            return { text, bbox: w.bbox, confidence: w.confidence };
+        })
+        .filter((w) => w.text.length > 0);
+
+    // Build context and classify words
+    const CONTEXT_WINDOW = 3;
+    const words: OcrWord[] = await Promise.all(
+        cleanedWords.map(async (w, index) => {
+            const level = await getWordLevelAsync(w.text);
+            const difficulty = getRelativeDifficulty(w.text, userLevel);
+
+            const start = Math.max(0, index - CONTEXT_WINDOW);
+            const end = Math.min(cleanedWords.length - 1, index + CONTEXT_WINDOW);
+            const contextWords: string[] = [];
+            for (let i = start; i <= end; i++) {
+                contextWords.push(cleanedWords[i].text);
+            }
+            const context = contextWords.join(' ');
+
+            return {
+                text: w.text,
+                bbox: {
+                    x0: w.bbox.x0,
+                    y0: w.bbox.y0,
+                    x1: w.bbox.x1,
+                    y1: w.bbox.y1,
+                },
+                confidence: w.confidence,
+                level,
+                difficulty,
+                context,
+            };
+        })
+    );
+
+    return {
+        words,
+        skewAngle: preprocess.wasDeskewed ? preprocess.skewAngle : 0,
+    };
+}
+
+/**
+ * Run PaddleOCR engine. Returns line-level detections split into word-level bboxes.
+ * Falls back to null on failure so the caller can retry with Tesseract.
+ */
+async function runPaddleOcr(
+    preprocess: PreprocessResult,
+    userLevel: CEFRLevel,
+    setProgress: (p: number) => void,
+): Promise<OcrResult> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const paddleOcr = await import('@paddle-js-models/ocr') as any;
+
+    if (paddleOcr.init) {
+        await paddleOcr.init();
+    } else if (paddleOcr.default?.init) {
+        await paddleOcr.default.init();
+    }
+    setProgress(30);
+
+    const img = await loadImage(preprocess.ocrUrl);
+
+    const recognize = paddleOcr.recognize ?? paddleOcr.default?.recognize;
+    const result = await recognize(img);
+    setProgress(70);
+
+    const pad = preprocess.padding;
+
+    // PaddleOCR returns line-level detections; split into word-level bboxes
+    const rawWords: RawWord[] = [];
+    const lines = Array.isArray(result) ? result : (result?.text ?? result?.data ?? []);
+
+    for (const line of lines) {
+        const text: string = typeof line === 'string' ? line : (line.text ?? '');
+        const wordTokens = text.split(/\s+/).filter((t: string) => t.length > 0);
+        if (wordTokens.length === 0) continue;
+
+        // Get line bbox from corner points
+        const points: number[][] = line.points ?? line.box ?? [];
+        if (points.length < 4) continue;
+
+        const xs = points.map((p: number[]) => p[0]);
+        const ys = points.map((p: number[]) => p[1]);
+        const lx0 = Math.min(...xs) - pad;
+        const ly0 = Math.min(...ys) - pad;
+        const lx1 = Math.max(...xs) - pad;
+        const ly1 = Math.max(...ys) - pad;
+
+        const lineWidth = lx1 - lx0;
+        const totalChars = wordTokens.reduce((sum: number, t: string) => sum + t.length, 0);
+        const conf = typeof (line.confidence ?? line.score) === 'number'
+            ? (line.confidence ?? line.score)
+            : 80;
+
+        let currentX = lx0;
+        for (const token of wordTokens) {
+            const wordWidth = (token.length / totalChars) * lineWidth;
+            rawWords.push({
+                text: token,
+                bbox: { x0: currentX, y0: ly0, x1: currentX + wordWidth, y1: ly1 },
+                confidence: conf,
+            });
+            currentX += wordWidth;
+        }
+    }
+
+    return postProcessWords(rawWords, preprocess, userLevel);
+}
+
 export function useOcr(): UseOcrResult {
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState<string | null>(null);
 
     const analyze = useCallback(
-        async (imageUrl: string, userLevel: CEFRLevel): Promise<OcrResult> => {
+        async (imageUrl: string, userLevel: CEFRLevel, engine: OcrEngine = 'tesseract'): Promise<OcrResult> => {
             setIsAnalyzing(true);
             setProgress(0);
             setError(null);
@@ -445,6 +808,19 @@ export function useOcr(): UseOcrResult {
                 // Preprocess image for better OCR accuracy
                 const preprocess = await preprocessImage(imageUrl);
 
+                // PaddleOCR path — fall back to Tesseract on failure
+                if (engine === 'paddleocr') {
+                    try {
+                        const result = await runPaddleOcr(preprocess, userLevel, setProgress);
+                        setProgress(100);
+                        return result;
+                    } catch (e) {
+                        console.warn('PaddleOCR failed, falling back to Tesseract:', e);
+                        // Fall through to Tesseract
+                    }
+                }
+
+                // Tesseract path
                 worker = await createWorker('eng', 1, {
                     logger: (m) => {
                         if (m.status === 'recognizing text') {
@@ -461,7 +837,7 @@ export function useOcr(): UseOcrResult {
                 const result = await worker.recognize(preprocess.ocrUrl);
                 const pad = preprocess.padding;
 
-                // Step 1: Extract words and adjust bboxes for padding offset
+                // Extract words and adjust bboxes for padding offset
                 const ocrWords: RawWord[] = result.data.words
                     .filter((w) => w.text.trim().length > 0)
                     .filter((w) => w.confidence >= 40)
@@ -476,107 +852,9 @@ export function useOcr(): UseOcrResult {
                         confidence: w.confidence,
                     }));
 
-                // Step 2: Merge word fragments split by OCR
-                const mergedWords = mergeFragmentedWords(ocrWords);
-
-                // Step 3: Transform bboxes from deskewed space back to original image space
-                let finalWords: RawWord[] = mergedWords;
-                if (preprocess.wasDeskewed) {
-                    const s = preprocess.skewAngle * Math.PI / 180;
-                    const cosS = Math.cos(s);
-                    const sinS = Math.sin(s);
-                    const dCx = preprocess.deskewedWidth / 2;
-                    const dCy = preprocess.deskewedHeight / 2;
-                    const oCx = preprocess.processedWidth / 2;
-                    const oCy = preprocess.processedHeight / 2;
-
-                    finalWords = mergedWords.map((w) => {
-                        const bCx = (w.bbox.x0 + w.bbox.x1) / 2;
-                        const bCy = (w.bbox.y0 + w.bbox.y1) / 2;
-                        const bW = w.bbox.x1 - w.bbox.x0;
-                        const bH = w.bbox.y1 - w.bbox.y0;
-
-                        // Inverse rotation: deskewed center → processed-original center
-                        const dx = bCx - dCx;
-                        const dy = bCy - dCy;
-                        const origCx = cosS * dx - sinS * dy + oCx;
-                        const origCy = sinS * dx + cosS * dy + oCy;
-
-                        return {
-                            ...w,
-                            bbox: {
-                                x0: origCx - bW / 2,
-                                y0: origCy - bH / 2,
-                                x1: origCx + bW / 2,
-                                y1: origCy + bH / 2,
-                            },
-                        };
-                    });
-                }
-
-                // Step 4: Scale bboxes from processed coords to full-resolution original
-                const cs = preprocess.coordScale;
-                if (cs !== 1) {
-                    finalWords = finalWords.map((w) => ({
-                        ...w,
-                        bbox: {
-                            x0: w.bbox.x0 * cs,
-                            y0: w.bbox.y0 * cs,
-                            x1: w.bbox.x1 * cs,
-                            y1: w.bbox.y1 * cs,
-                        },
-                    }));
-                }
-
-                // Step 5: Clean text
-                const rawWords = finalWords
-                    .map((w) => {
-                        const text = w.text
-                            .replace(/^[^a-zA-Z]+/, '')
-                            .replace(/[^a-zA-Z]+$/, '')
-                            .replace(/[^a-zA-Z'-]/g, '');
-                        return { text, bbox: w.bbox, confidence: w.confidence };
-                    })
-                    .filter((w) => w.text.length > 0);
-
-                // Build context for each word (±3 surrounding words)
-                const CONTEXT_WINDOW = 3;
-
-                const words: OcrWord[] = await Promise.all(
-                    rawWords.map(async (w, index) => {
-                        const level = await getWordLevelAsync(w.text);
-                        const difficulty = getRelativeDifficulty(w.text, userLevel);
-
-                        // Build context string from surrounding words
-                        const start = Math.max(0, index - CONTEXT_WINDOW);
-                        const end = Math.min(rawWords.length - 1, index + CONTEXT_WINDOW);
-                        const contextWords: string[] = [];
-                        for (let i = start; i <= end; i++) {
-                            contextWords.push(rawWords[i].text);
-                        }
-                        const context = contextWords.join(' ');
-
-                        return {
-                            text: w.text,
-                            bbox: {
-                                x0: w.bbox.x0,
-                                y0: w.bbox.y0,
-                                x1: w.bbox.x1,
-                                y1: w.bbox.y1,
-                            },
-                            confidence: w.confidence,
-                            level,
-                            difficulty,
-                            context,
-                        };
-                    })
-                );
-
+                const ocrResult = await postProcessWords(ocrWords, preprocess, userLevel);
                 setProgress(100);
-                return {
-                    words,
-                    skewAngle: preprocess.wasDeskewed ? preprocess.skewAngle : 0,
-                };
+                return ocrResult;
             } catch (err) {
                 const msg = err instanceof Error ? err.message : 'OCR analysis failed';
                 setError(msg);

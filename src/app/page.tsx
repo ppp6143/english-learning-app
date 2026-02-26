@@ -15,7 +15,7 @@ import {
     getRelativeDifficulty,
     getHighlightStyle,
 } from '@/src/lib/wordLevels';
-import { OcrWord } from '@/src/lib/types';
+import { OcrWord, OcrEngine } from '@/src/lib/types';
 import { prefetchTranslations, clearTranslationCache } from '@/src/lib/translationCache';
 
 /** Rotate an image 90 degrees clockwise on a canvas */
@@ -61,6 +61,7 @@ export default function Home() {
     // UI Settings State
     const [popupScaleMode, setPopupScaleMode] = useState<PopupScaleMode>('dynamic');
     const [popupPositionMode, setPopupPositionMode] = useState<PopupPositionMode>('near');
+    const [ocrEngine, setOcrEngine] = useState<OcrEngine>('tesseract');
 
     // Popup state
     const [selectedWord, setSelectedWord] = useState<OcrWord | null>(null);
@@ -96,7 +97,7 @@ export default function Home() {
             };
             img.src = dataUrl;
 
-            const ocrResult = await analyze(dataUrl, userLevel);
+            const ocrResult = await analyze(dataUrl, userLevel, ocrEngine);
             setWords(ocrResult.words);
             setSkewAngle(ocrResult.skewAngle);
 
@@ -105,7 +106,7 @@ export default function Home() {
             );
             setTranslationCache(finalCache);
         },
-        [analyze, userLevel]
+        [analyze, userLevel, ocrEngine]
     );
 
     // Handle manual 90° rotation (image only, no OCR)
@@ -130,7 +131,7 @@ export default function Home() {
         clearTranslationCache();
         setTranslationCache({});
 
-        const ocrResult = await analyze(imageDataUrl, userLevel);
+        const ocrResult = await analyze(imageDataUrl, userLevel, ocrEngine);
         setWords(ocrResult.words);
         setSkewAngle(ocrResult.skewAngle);
 
@@ -138,7 +139,7 @@ export default function Home() {
             ocrResult.words.map(w => ({ text: w.text })),
         );
         setTranslationCache(finalCache);
-    }, [imageDataUrl, isAnalyzing, analyze, userLevel]);
+    }, [imageDataUrl, isAnalyzing, analyze, userLevel, ocrEngine]);
 
     // Handle user level change — re-classify words dynamically
     const handleLevelChange = useCallback(
@@ -405,6 +406,8 @@ export default function Home() {
                 onScaleChange={setPopupScaleMode}
                 positionMode={popupPositionMode}
                 onPositionChange={setPopupPositionMode}
+                ocrEngine={ocrEngine}
+                onOcrEngineChange={setOcrEngine}
             />
         </main>
     );

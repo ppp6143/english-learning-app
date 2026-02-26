@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { OcrEngine } from '@/src/lib/types';
 
 export type PopupScaleMode = 'dynamic' | 'fixed';
 export type PopupPositionMode = 'near' | 'bottom';
@@ -10,6 +11,8 @@ interface UISettingsProps {
     onScaleChange: (mode: PopupScaleMode) => void;
     positionMode: PopupPositionMode;
     onPositionChange: (mode: PopupPositionMode) => void;
+    ocrEngine: OcrEngine;
+    onOcrEngineChange: (engine: OcrEngine) => void;
 }
 
 export default function UISettings({
@@ -17,6 +20,8 @@ export default function UISettings({
     onScaleChange,
     positionMode,
     onPositionChange,
+    ocrEngine,
+    onOcrEngineChange,
 }: UISettingsProps) {
     const [isOpen, setIsOpen] = useState(false);
 
@@ -101,6 +106,36 @@ export default function UISettings({
                                 {positionMode === 'near'
                                     ? "Appears next to the word"
                                     : "Docked at bottom of screen"}
+                            </p>
+                        </div>
+
+                        {/* OCR Engine */}
+                        <div>
+                            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 block">OCR Engine</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => onOcrEngineChange('tesseract')}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${ocrEngine === 'tesseract'
+                                            ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                        }`}
+                                >
+                                    Tesseract
+                                </button>
+                                <button
+                                    onClick={() => onOcrEngineChange('paddleocr')}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${ocrEngine === 'paddleocr'
+                                            ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                        }`}
+                                >
+                                    PaddleOCR
+                                </button>
+                            </div>
+                            <p className="text-[10px] text-gray-500 mt-1.5">
+                                {ocrEngine === 'tesseract'
+                                    ? "Standard engine, good for clean text"
+                                    : "Alternative engine, better for complex layouts"}
                             </p>
                         </div>
                     </div>

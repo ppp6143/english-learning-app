@@ -1,6 +1,8 @@
 // OCR word result type shared across components
 import { CEFRLevel, RelativeDifficulty } from './wordLevels';
 
+export type OcrEngine = 'tesseract' | 'paddleocr';
+
 export interface OcrWord {
     text: string;
     bbox: {
