@@ -77,6 +77,9 @@ export default function CropOverlay({
         draggingIndex.current = null;
     }, []);
 
+    // Guard: if corners are empty, don't render (avoids full-image dark overlay)
+    if (pixelCorners.length < 4) return null;
+
     // Polygon points string for SVG
     const polyPoints = pixelCorners.map(p => `${p.x},${p.y}`).join(' ');
 
@@ -88,7 +91,7 @@ export default function CropOverlay({
             ref={svgRef}
             viewBox={`0 0 ${imageWidth} ${imageHeight}`}
             className="absolute inset-0 w-full h-full"
-            style={{ touchAction: 'none' }}
+            style={{ touchAction: 'pan-y' }}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
