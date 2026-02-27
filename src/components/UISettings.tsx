@@ -148,22 +148,22 @@ export default function UISettings({
                             <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 block">Document Scanner</label>
                             <div className="grid grid-cols-3 gap-2">
                                 <button
-                                    onClick={() => onScanModeChange('clean')}
-                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${scanMode === 'clean'
+                                    onClick={() => onScanModeChange('enhanced')}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${scanMode === 'enhanced'
                                             ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
                                             : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
                                         }`}
                                 >
-                                    Clean
+                                    Enhanced
                                 </button>
                                 <button
-                                    onClick={() => onScanModeChange('natural')}
-                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${scanMode === 'natural'
+                                    onClick={() => onScanModeChange('bw')}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${scanMode === 'bw'
                                             ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
                                             : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
                                         }`}
                                 >
-                                    Natural
+                                    B&W
                                 </button>
                                 <button
                                     onClick={() => onScanModeChange('off')}
@@ -176,11 +176,11 @@ export default function UISettings({
                                 </button>
                             </div>
                             <p className="text-[10px] text-gray-500 mt-1.5">
-                                {scanMode === 'clean'
-                                    ? "B&W scan, best for printed text"
-                                    : scanMode === 'natural'
-                                    ? "Enhanced contrast, preserves appearance"
-                                    : "No preprocessing, use original image"}
+                                {scanMode === 'enhanced'
+                                    ? "Shadow removal + contrast boost, crop & straighten"
+                                    : scanMode === 'bw'
+                                    ? "B&W threshold, best for printed text"
+                                    : "No scanner, analyze original image directly"}
                             </p>
                         </div>
                     </div>

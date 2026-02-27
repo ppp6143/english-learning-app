@@ -2,7 +2,13 @@
 import { CEFRLevel, RelativeDifficulty } from './wordLevels';
 
 export type OcrEngine = 'tesseract' | 'paddleocr';
-export type ScanMode = 'clean' | 'natural' | 'off';
+export type ScanMode = 'enhanced' | 'bw' | 'off';
+
+/** A corner point in normalized 0-1 coordinates (fraction of image width/height) */
+export interface Corner {
+    x: number;
+    y: number;
+}
 
 export interface OcrWord {
     text: string;
@@ -22,9 +28,5 @@ export interface OcrResult {
     words: OcrWord[];
     /** Detected skew angle for tilting highlights (degrees, positive = clockwise tilt) */
     skewAngle: number;
-    /** Data URL of the scanned/preprocessed image (if document scanner was used) */
-    scannedUrl?: string;
-    /** Whether a document contour was successfully detected */
-    documentDetected?: boolean;
 }
 
