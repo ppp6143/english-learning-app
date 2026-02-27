@@ -22,6 +22,14 @@ import { prefetchTranslations, clearTranslationCache, translateSingleWord, trans
 import { getRelatedPhrasalVerbs, PhrasalVerbEntry } from '@/src/lib/phrasalVerbs';
 import { decomposeWord, MorphemeDecomposition } from '@/src/lib/morphemeAnalyzer';
 
+/** Default crop corners: 10% inset from edges */
+const DEFAULT_CORNERS: Corner[] = [
+    { x: 0.1, y: 0.1 },
+    { x: 0.9, y: 0.1 },
+    { x: 0.9, y: 0.9 },
+    { x: 0.1, y: 0.9 },
+];
+
 /** Rotate an image 90 degrees clockwise on a canvas */
 function rotateImage90CW(
     imgSrc: string
@@ -74,6 +82,7 @@ export default function Home() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null);
     const [originalNaturalSize, setOriginalNaturalSize] = useState({ width: 0, height: 0 });
+    const [scanError, setScanError] = useState<string | null>(null);
 
     // Popup state
     const [selectedWord, setSelectedWord] = useState<OcrWord | null>(null);
@@ -110,14 +119,6 @@ export default function Home() {
         return () => window.removeEventListener('resize', updateDisplaySize);
     }, [updateDisplaySize]);
 
-    // Default corners: 10% inset from edges
-    const defaultCorners: Corner[] = [
-        { x: 0.1, y: 0.1 },
-        { x: 0.9, y: 0.1 },
-        { x: 0.9, y: 0.9 },
-        { x: 0.1, y: 0.9 },
-    ];
-
     // Handle image selection
     const handleImageSelected = useCallback(
         async (_file: File, dataUrl: string) => {
@@ -125,6 +126,7 @@ export default function Home() {
             setWords([]);
             setSelectedWord(null);
             setProcessedImageUrl(null);
+            setScanError(null);
             clearTranslationCache();
             setTranslationCache({});
 
@@ -155,13 +157,13 @@ export default function Home() {
                 setIsCropping(true);
                 try {
                     const detected = await detectDocumentCorners(dataUrl);
-                    setCropCorners(detected ?? defaultCorners);
+                    setCropCorners(detected ?? DEFAULT_CORNERS);
                 } catch {
-                    setCropCorners(defaultCorners);
+                    setCropCorners(DEFAULT_CORNERS);
                 }
             }
         },
-        [analyze, userLevel, ocrEngine, scanMode, defaultCorners]
+        [analyze, userLevel, ocrEngine, scanMode]
     );
 
     // Handle manual 90° rotation (image only, no OCR)
@@ -183,27 +185,45 @@ export default function Home() {
         }
     }, [imageDataUrl, isAnalyzing, isProcessing, processedImageUrl]);
 
-    // Crop & Scan: apply perspective transform + enhancement
+    // Crop & Scan: perspective correction → enhancement → OCR (full pipeline)
     const handleCropAndScan = useCallback(async () => {
         if (!imageDataUrl || cropCorners.length !== 4) return;
         setIsProcessing(true);
+        setScanError(null);
+        setWords([]);
+        setSelectedWord(null);
+        clearTranslationCache();
+        setTranslationCache({});
+
         try {
+            // Step 1: Perspective correction + shadow removal + enhancement
             const result = await cropAndEnhance(imageDataUrl, cropCorners, scanMode);
             setProcessedImageUrl(result.dataUrl);
             setImageNaturalSize({ width: result.width, height: result.height });
             setIsCropping(false);
+            setIsProcessing(false);
+
+            // Step 2: OCR on the processed image
+            const ocrResult = await analyze(result.dataUrl, userLevel, ocrEngine);
+            setWords(ocrResult.words);
+            setSkewAngle(ocrResult.skewAngle);
+            const finalCache = prefetchTranslations(
+                ocrResult.words.map(w => ({ text: w.text })),
+            );
+            setTranslationCache(finalCache);
         } catch (e) {
-            console.warn('Crop & scan failed:', e);
-        } finally {
+            console.error('Crop & scan failed:', e);
+            setScanError(e instanceof Error ? e.message : 'Scan processing failed');
             setIsProcessing(false);
         }
-    }, [imageDataUrl, cropCorners, scanMode]);
+    }, [imageDataUrl, cropCorners, scanMode, analyze, userLevel, ocrEngine]);
 
     // Reset crop: go back to cropping mode
     const handleResetCrop = useCallback(() => {
         setProcessedImageUrl(null);
         setWords([]);
         setSelectedWord(null);
+        setScanError(null);
         setImageNaturalSize(originalNaturalSize);
         setIsCropping(true);
     }, [originalNaturalSize]);
@@ -434,9 +454,9 @@ export default function Home() {
                 )}
 
                 {/* Error message */}
-                {error && (
+                {(error || scanError) && (
                     <div className="mt-6 p-4 bg-red-950/50 border border-red-800/50 rounded-xl text-red-300 text-sm">
-                        <span className="font-semibold">Error:</span> {error}
+                        <span className="font-semibold">Error:</span> {error || scanError}
                     </div>
                 )}
 
@@ -692,6 +712,7 @@ export default function Home() {
                                     setProcessedImageUrl(null);
                                     setIsCropping(false);
                                     setCropCorners([]);
+                                    setScanError(null);
                                     handleSearchClear();
                                 }}
                                 className="px-4 py-2 text-sm rounded-lg border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-all duration-200"
