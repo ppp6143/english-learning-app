@@ -10,7 +10,7 @@ type OpenCV = any;
 let loadPromise: Promise<OpenCV> | null = null;
 
 const CDN_URLS = [
-    'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.3/opencv.js',
+    'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.3/dist/opencv.js',
     'https://docs.opencv.org/4.9.0/opencv.js',
 ];
 
