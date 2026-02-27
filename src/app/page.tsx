@@ -16,7 +16,8 @@ import {
     getHighlightStyle,
     getWordLevel,
 } from '@/src/lib/wordLevels';
-import { OcrWord, OcrEngine } from '@/src/lib/types';
+import ImagePreprocessor from '@/src/components/ImagePreprocessor';
+import { OcrWord, OcrEngine, ScanMode } from '@/src/lib/types';
 import { prefetchTranslations, clearTranslationCache, translateSingleWord, translatePhrase, getSuggestions, Suggestion } from '@/src/lib/translationCache';
 import { getRelatedPhrasalVerbs, PhrasalVerbEntry } from '@/src/lib/phrasalVerbs';
 import { decomposeWord, MorphemeDecomposition } from '@/src/lib/morphemeAnalyzer';
@@ -54,7 +55,7 @@ export default function Home() {
     const containerRef = useRef<HTMLDivElement>(null);
 
     // OCR state
-    const { analyze, isAnalyzing, progress, error } = useOcr();
+    const { analyze, isAnalyzing, isScanning, scanResult, progress, error } = useOcr();
     const [words, setWords] = useState<OcrWord[]>([]);
     const [skewAngle, setSkewAngle] = useState(0);
 
@@ -65,6 +66,11 @@ export default function Home() {
     const [popupScaleMode, setPopupScaleMode] = useState<PopupScaleMode>('dynamic');
     const [popupPositionMode, setPopupPositionMode] = useState<PopupPositionMode>('near');
     const [ocrEngine, setOcrEngine] = useState<OcrEngine>('tesseract');
+    const [scanMode, setScanMode] = useState<ScanMode>('clean');
+
+    // Scan result display state
+    const [currentScannedUrl, setCurrentScannedUrl] = useState<string | null>(null);
+    const [currentDocDetected, setCurrentDocDetected] = useState(false);
 
     // Popup state
     const [selectedWord, setSelectedWord] = useState<OcrWord | null>(null);
@@ -107,6 +113,8 @@ export default function Home() {
             setImageDataUrl(dataUrl);
             setWords([]);
             setSelectedWord(null);
+            setCurrentScannedUrl(null);
+            setCurrentDocDetected(false);
             clearTranslationCache();
             setTranslationCache({});
 
@@ -116,16 +124,19 @@ export default function Home() {
             };
             img.src = dataUrl;
 
-            const ocrResult = await analyze(dataUrl, userLevel, ocrEngine);
+            const ocrResult = await analyze(dataUrl, userLevel, ocrEngine, scanMode);
             setWords(ocrResult.words);
             setSkewAngle(ocrResult.skewAngle);
+            setCurrentScannedUrl(ocrResult.scannedUrl ?? null);
+            setCurrentDocDetected(ocrResult.documentDetected ?? false);
+
 
             const finalCache = prefetchTranslations(
                 ocrResult.words.map(w => ({ text: w.text })),
             );
             setTranslationCache(finalCache);
         },
-        [analyze, userLevel, ocrEngine]
+        [analyze, userLevel, ocrEngine, scanMode]
     );
 
     // Handle manual 90° rotation (image only, no OCR)
@@ -150,15 +161,17 @@ export default function Home() {
         clearTranslationCache();
         setTranslationCache({});
 
-        const ocrResult = await analyze(imageDataUrl, userLevel, ocrEngine);
+        const ocrResult = await analyze(imageDataUrl, userLevel, ocrEngine, scanMode);
         setWords(ocrResult.words);
         setSkewAngle(ocrResult.skewAngle);
+        setCurrentScannedUrl(ocrResult.scannedUrl ?? null);
+        setCurrentDocDetected(ocrResult.documentDetected ?? false);
 
         const finalCache = prefetchTranslations(
             ocrResult.words.map(w => ({ text: w.text })),
         );
         setTranslationCache(finalCache);
-    }, [imageDataUrl, isAnalyzing, analyze, userLevel, ocrEngine]);
+    }, [imageDataUrl, isAnalyzing, analyze, userLevel, ocrEngine, scanMode]);
 
     // Handle user level change — re-classify words dynamically
     const handleLevelChange = useCallback(
@@ -549,18 +562,39 @@ export default function Home() {
                             ref={containerRef}
                             className="relative inline-block rounded-xl overflow-hidden border border-gray-800 shadow-2xl shadow-black/40 bg-gray-900"
                         >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                                ref={imageRef}
-                                src={imageDataUrl}
-                                alt="Uploaded text"
-                                onLoad={handleImageLoad}
-                                className="block max-w-full h-auto"
-                                style={{ maxHeight: '70vh' }}
-                            />
+                            {currentScannedUrl ? (
+                                <ImagePreprocessor
+                                    originalUrl={imageDataUrl}
+                                    scannedUrl={currentScannedUrl}
+                                    documentDetected={currentDocDetected}
+                                    isScanning={isScanning}
+                                />
+                            ) : (
+                                <>
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        ref={imageRef}
+                                        src={imageDataUrl}
+                                        alt="Uploaded text"
+                                        onLoad={handleImageLoad}
+                                        className="block max-w-full h-auto"
+                                        style={{ maxHeight: '70vh' }}
+                                    />
+                                </>
+                            )}
 
-                            {/* Highlight overlay */}
-                            {words.length > 0 && imageDisplaySize.width > 0 && (
+                            {/* Scanning spinner when no scanned result yet */}
+                            {isScanning && !currentScannedUrl && (
+                                <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-950/60 backdrop-blur-sm rounded-xl">
+                                    <div className="flex items-center gap-3 px-4 py-3 bg-gray-900/90 rounded-lg border border-gray-700/50">
+                                        <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                                        <span className="text-sm text-gray-300">Scanning document...</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Highlight overlay — only show on original image (coordinates don't match scanned) */}
+                            {words.length > 0 && imageDisplaySize.width > 0 && !currentScannedUrl && (
                                 <HighlightOverlay
                                     words={words}
                                     imageWidth={imageNaturalSize.width}
@@ -580,6 +614,8 @@ export default function Home() {
                                     setImageDataUrl(null);
                                     setWords([]);
                                     setSelectedWord(null);
+                                    setCurrentScannedUrl(null);
+                                    setCurrentDocDetected(false);
                                     handleSearchClear();
                                 }}
                                 className="px-4 py-2 text-sm rounded-lg border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-all duration-200"
@@ -666,6 +702,8 @@ export default function Home() {
                 onPositionChange={setPopupPositionMode}
                 ocrEngine={ocrEngine}
                 onOcrEngineChange={setOcrEngine}
+                scanMode={scanMode}
+                onScanModeChange={setScanMode}
             />
         </main>
     );

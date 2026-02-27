@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { OcrEngine } from '@/src/lib/types';
+import { OcrEngine, ScanMode } from '@/src/lib/types';
 
 export type PopupScaleMode = 'dynamic' | 'fixed';
 export type PopupPositionMode = 'near' | 'bottom';
@@ -13,6 +13,8 @@ interface UISettingsProps {
     onPositionChange: (mode: PopupPositionMode) => void;
     ocrEngine: OcrEngine;
     onOcrEngineChange: (engine: OcrEngine) => void;
+    scanMode: ScanMode;
+    onScanModeChange: (mode: ScanMode) => void;
 }
 
 export default function UISettings({
@@ -22,6 +24,8 @@ export default function UISettings({
     onPositionChange,
     ocrEngine,
     onOcrEngineChange,
+    scanMode,
+    onScanModeChange,
 }: UISettingsProps) {
     const [isOpen, setIsOpen] = useState(false);
 
@@ -136,6 +140,47 @@ export default function UISettings({
                                 {ocrEngine === 'tesseract'
                                     ? "Standard engine, good for clean text"
                                     : "Alternative engine, better for complex layouts"}
+                            </p>
+                        </div>
+
+                        {/* Document Scanner */}
+                        <div>
+                            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 block">Document Scanner</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                <button
+                                    onClick={() => onScanModeChange('clean')}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${scanMode === 'clean'
+                                            ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                        }`}
+                                >
+                                    Clean
+                                </button>
+                                <button
+                                    onClick={() => onScanModeChange('natural')}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${scanMode === 'natural'
+                                            ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                        }`}
+                                >
+                                    Natural
+                                </button>
+                                <button
+                                    onClick={() => onScanModeChange('off')}
+                                    className={`px-3 py-2 text-sm rounded-lg border transition-all ${scanMode === 'off'
+                                            ? 'bg-amber-500/10 border-amber-500/50 text-amber-400'
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                        }`}
+                                >
+                                    Off
+                                </button>
+                            </div>
+                            <p className="text-[10px] text-gray-500 mt-1.5">
+                                {scanMode === 'clean'
+                                    ? "B&W scan, best for printed text"
+                                    : scanMode === 'natural'
+                                    ? "Enhanced contrast, preserves appearance"
+                                    : "No preprocessing, use original image"}
                             </p>
                         </div>
                     </div>

@@ -2,6 +2,7 @@
 import { CEFRLevel, RelativeDifficulty } from './wordLevels';
 
 export type OcrEngine = 'tesseract' | 'paddleocr';
+export type ScanMode = 'clean' | 'natural' | 'off';
 
 export interface OcrWord {
     text: string;
@@ -21,5 +22,9 @@ export interface OcrResult {
     words: OcrWord[];
     /** Detected skew angle for tilting highlights (degrees, positive = clockwise tilt) */
     skewAngle: number;
+    /** Data URL of the scanned/preprocessed image (if document scanner was used) */
+    scannedUrl?: string;
+    /** Whether a document contour was successfully detected */
+    documentDetected?: boolean;
 }
 

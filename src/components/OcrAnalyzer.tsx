@@ -2,12 +2,15 @@
 
 import { useCallback, useState } from 'react';
 import { createWorker, Worker, PSM } from 'tesseract.js';
-import { OcrWord, OcrResult, OcrEngine } from '@/src/lib/types';
+import { OcrWord, OcrResult, OcrEngine, ScanMode } from '@/src/lib/types';
+import { scanDocument, ScanResult } from '@/src/lib/document-scanner';
 import { CEFRLevel, getWordLevelAsync, getRelativeDifficulty } from '@/src/lib/wordLevels';
 
 interface UseOcrResult {
-    analyze: (imageUrl: string, userLevel: CEFRLevel, engine?: OcrEngine) => Promise<OcrResult>;
+    analyze: (imageUrl: string, userLevel: CEFRLevel, engine?: OcrEngine, scanMode?: ScanMode) => Promise<OcrResult>;
     isAnalyzing: boolean;
+    isScanning: boolean;
+    scanResult: ScanResult | null;
     progress: number;
     error: string | null;
 }
@@ -791,28 +794,99 @@ async function runPaddleOcr(
     return postProcessWords(rawWords, preprocess, userLevel);
 }
 
+/**
+ * Lightweight preprocessing for scanned images: downsample + white padding only.
+ * The document scanner already handles contrast/threshold, so we skip heavy processing.
+ */
+async function preprocessImageSimple(imageUrl: string): Promise<PreprocessResult> {
+    const origImg = await loadImage(imageUrl);
+    const fullW = origImg.naturalWidth;
+    const fullH = origImg.naturalHeight;
+
+    const MAX_OCR_DIM = 2000;
+    const dsRatio = Math.min(1, MAX_OCR_DIM / Math.max(fullW, fullH));
+    const w = Math.round(fullW * dsRatio);
+    const h = Math.round(fullH * dsRatio);
+    const coordScale = 1 / dsRatio;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(origImg, 0, 0, w, h);
+
+    // Add white padding for better edge character recognition
+    const PADDING = 30;
+    const paddedCanvas = document.createElement('canvas');
+    paddedCanvas.width = w + PADDING * 2;
+    paddedCanvas.height = h + PADDING * 2;
+    const pCtx = paddedCanvas.getContext('2d')!;
+    pCtx.fillStyle = '#ffffff';
+    pCtx.fillRect(0, 0, paddedCanvas.width, paddedCanvas.height);
+    pCtx.drawImage(canvas, PADDING, PADDING);
+
+    return {
+        ocrUrl: paddedCanvas.toDataURL('image/png'),
+        padding: PADDING,
+        skewAngle: 0,
+        processedWidth: w,
+        processedHeight: h,
+        deskewedWidth: w,
+        deskewedHeight: h,
+        wasDeskewed: false,
+        coordScale,
+    };
+}
+
 export function useOcr(): UseOcrResult {
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanResultState, setScanResultState] = useState<ScanResult | null>(null);
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState<string | null>(null);
 
     const analyze = useCallback(
-        async (imageUrl: string, userLevel: CEFRLevel, engine: OcrEngine = 'tesseract'): Promise<OcrResult> => {
+        async (imageUrl: string, userLevel: CEFRLevel, engine: OcrEngine = 'tesseract', scanMode: ScanMode = 'off'): Promise<OcrResult> => {
             setIsAnalyzing(true);
             setProgress(0);
             setError(null);
+            setScanResultState(null);
 
             let worker: Worker | null = null;
 
             try {
+                // Document scanning step (if enabled)
+                let ocrImageUrl = imageUrl;
+                let scanRes: ScanResult | null = null;
+
+                if (scanMode !== 'off') {
+                    try {
+                        setIsScanning(true);
+                        scanRes = await scanDocument(imageUrl, scanMode);
+                        setScanResultState(scanRes);
+                        ocrImageUrl = scanRes.scannedUrl;
+                    } catch (e) {
+                        console.warn('Document scanner failed, using original image:', e);
+                    } finally {
+                        setIsScanning(false);
+                    }
+                }
+
                 // Preprocess image for better OCR accuracy
-                const preprocess = await preprocessImage(imageUrl);
+                // If scanner was used successfully, use lightweight preprocessing
+                const preprocess = scanRes
+                    ? await preprocessImageSimple(ocrImageUrl)
+                    : await preprocessImage(imageUrl);
 
                 // PaddleOCR path — fall back to Tesseract on failure
                 if (engine === 'paddleocr') {
                     try {
                         const result = await runPaddleOcr(preprocess, userLevel, setProgress);
                         setProgress(100);
+                        if (scanRes) {
+                            result.scannedUrl = scanRes.scannedUrl;
+                            result.documentDetected = scanRes.documentDetected;
+                        }
                         return result;
                     } catch (e) {
                         console.warn('PaddleOCR failed, falling back to Tesseract:', e);
@@ -854,6 +928,13 @@ export function useOcr(): UseOcrResult {
 
                 const ocrResult = await postProcessWords(ocrWords, preprocess, userLevel);
                 setProgress(100);
+
+                // Attach scan result info
+                if (scanRes) {
+                    ocrResult.scannedUrl = scanRes.scannedUrl;
+                    ocrResult.documentDetected = scanRes.documentDetected;
+                }
+
                 return ocrResult;
             } catch (err) {
                 const msg = err instanceof Error ? err.message : 'OCR analysis failed';
@@ -869,5 +950,5 @@ export function useOcr(): UseOcrResult {
         []
     );
 
-    return { analyze, isAnalyzing, progress, error };
+    return { analyze, isAnalyzing, isScanning, scanResult: scanResultState, progress, error };
 }
