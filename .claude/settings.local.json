@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx next build:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(dir:*)",
+      "Bash(wc:*)",
+      "Bash(git pull:*)",
+      "Bash(npm run build:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:codesandbox.io)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(done)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" status)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" log --oneline -3)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" diff --stat)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" add src/app/page.tsx src/components/WordListPanel.tsx src/lib/phrasalVerbs.ts src/lib/translationCache.ts)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" commit -m \"$\\(cat <<''EOF''\nAdd search autocomplete and simplify WordList panel\n\n- Add getSuggestions\\(\\) with debounced prefix matching across DICT and phrasal verbs\n- Autocomplete dropdown with keyboard navigation and phrasal verb badges\n- Simplify WordListPanel to show only at/below levels with Japanese translations\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" push)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" add src/app/lp/page.tsx)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" commit -m \"$\\(cat <<''EOF''\nAdd landing page at /lp with CSS app mockup\n\nStatic LP targeting Japanese English learners with hero section,\n3-step explanation, features, use cases, and CTA. Uses CSS mockup\ninstead of screenshots. Existing / route is unchanged.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" add src/app/layout.tsx package.json package-lock.json)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" commit -m \"$\\(cat <<''EOF''\nAdd Vercel Analytics\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(test:*)",
+      "Bash(npx vercel:*)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" remote -v)",
+      "Bash(gh api:*)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" add src/lib/siteConfig.ts src/app/robots.ts src/app/sitemap.ts src/app/opengraph-image.tsx src/app/lp/opengraph-image.tsx src/app/layout.tsx src/app/lp/page.tsx)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" commit -m \"$\\(cat <<''EOF''\nAdd SEO: sitemap, robots, OG images, structured data, metadata\n\n- robots.ts: allow all crawlers, link to sitemap\n- sitemap.ts: / and /lp with weekly update frequency\n- opengraph-image.tsx: dynamic OG image with app branding \\(both routes\\)\n- layout.tsx: rich metadata with Open Graph, Twitter Card, keywords\n- lp/page.tsx: JSON-LD WebApplication structured data, canonical URL\n- siteConfig.ts: centralized site URL/name constants\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" add src/lib/siteConfig.ts)",
+      "Bash(git -C \"C:\\\\Users\\\\yoshi\\\\Desktop\\\\english-learning-app\" commit -m \"$\\(cat <<''EOF''\nFix site URL to actual Vercel deployment\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(grep:*)",
+      "Bash(git clone:*)",
+      "Bash(git revert:*)"
+    ]
+  }
+}

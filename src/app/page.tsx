@@ -6,7 +6,7 @@ import HighlightOverlay from '@/src/components/HighlightOverlay';
 import WordPopup from '@/src/components/WordPopup';
 import UISettings, { PopupScaleMode, PopupPositionMode } from '@/src/components/UISettings';
 import WordListPanel from '@/src/components/WordListPanel';
-import CropOverlay from '@/src/components/CropOverlay';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { useOcr } from '@/src/components/OcrAnalyzer';
 import {
     CEFRLevel,
@@ -16,19 +16,10 @@ import {
     getHighlightStyle,
     getWordLevel,
 } from '@/src/lib/wordLevels';
-import { OcrWord, OcrEngine, ScanMode, Corner } from '@/src/lib/types';
-import { cropAndEnhance } from '@/src/lib/document-scanner';
+import { OcrWord, OcrEngine } from '@/src/lib/types';
 import { prefetchTranslations, clearTranslationCache, translateSingleWord, translatePhrase, getSuggestions, Suggestion } from '@/src/lib/translationCache';
 import { getRelatedPhrasalVerbs, PhrasalVerbEntry } from '@/src/lib/phrasalVerbs';
 import { decomposeWord, MorphemeDecomposition } from '@/src/lib/morphemeAnalyzer';
-
-/** Default crop corners: 10% inset from edges */
-const DEFAULT_CORNERS: Corner[] = [
-    { x: 0.1, y: 0.1 },
-    { x: 0.9, y: 0.1 },
-    { x: 0.9, y: 0.9 },
-    { x: 0.1, y: 0.9 },
-];
 
 /** Rotate an image 90 degrees clockwise on a canvas */
 function rotateImage90CW(
@@ -74,15 +65,6 @@ export default function Home() {
     const [popupScaleMode, setPopupScaleMode] = useState<PopupScaleMode>('dynamic');
     const [popupPositionMode, setPopupPositionMode] = useState<PopupPositionMode>('near');
     const [ocrEngine, setOcrEngine] = useState<OcrEngine>('tesseract');
-    const [scanMode, setScanMode] = useState<ScanMode>('enhanced');
-
-    // Crop/scan workflow state
-    const [cropCorners, setCropCorners] = useState<Corner[]>([]);
-    const [isCropping, setIsCropping] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null);
-    const [originalNaturalSize, setOriginalNaturalSize] = useState({ width: 0, height: 0 });
-    const [scanError, setScanError] = useState<string | null>(null);
 
     // Popup state
     const [selectedWord, setSelectedWord] = useState<OcrWord | null>(null);
@@ -119,136 +101,50 @@ export default function Home() {
         return () => window.removeEventListener('resize', updateDisplaySize);
     }, [updateDisplaySize]);
 
-    // Handle image selection
+    // Handle image selection — auto-analyze immediately
     const handleImageSelected = useCallback(
         async (_file: File, dataUrl: string) => {
             setImageDataUrl(dataUrl);
             setWords([]);
             setSelectedWord(null);
-            setProcessedImageUrl(null);
-            setScanError(null);
             clearTranslationCache();
             setTranslationCache({});
 
-            // Get natural size
             const img = new Image();
-            const sizePromise = new Promise<{ width: number; height: number }>((resolve) => {
-                img.onload = () => {
-                    const size = { width: img.naturalWidth, height: img.naturalHeight };
-                    setImageNaturalSize(size);
-                    setOriginalNaturalSize(size);
-                    resolve(size);
-                };
-            });
+            img.onload = () => {
+                setImageNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
+            };
             img.src = dataUrl;
-            await sizePromise;
 
-            if (scanMode === 'off') {
-                // Scanner OFF → auto-analyze immediately
-                const ocrResult = await analyze(dataUrl, userLevel, ocrEngine);
-                setWords(ocrResult.words);
-                setSkewAngle(ocrResult.skewAngle);
-                const finalCache = prefetchTranslations(
-                    ocrResult.words.map(w => ({ text: w.text })),
-                );
-                setTranslationCache(finalCache);
-            } else {
-                // Scanner ON → enter crop mode with default corners.
-                // OpenCV.js is NOT loaded here — it loads lazily when the
-                // user clicks "Crop & Scan", avoiding a heavy WASM download
-                // and main-thread freeze on mobile.
-                setCropCorners(DEFAULT_CORNERS);
-                setIsCropping(true);
-            }
+            const ocrResult = await analyze(dataUrl, userLevel, ocrEngine);
+            setWords(ocrResult.words);
+            setSkewAngle(ocrResult.skewAngle);
+
+            const finalCache = prefetchTranslations(
+                ocrResult.words.map(w => ({ text: w.text })),
+            );
+            setTranslationCache(finalCache);
         },
-        [analyze, userLevel, ocrEngine, scanMode]
+        [analyze, userLevel, ocrEngine]
     );
 
     // Handle manual 90° rotation (image only, no OCR)
     const handleRotate = useCallback(async () => {
-        if (!imageDataUrl || isAnalyzing || isProcessing) return;
-        const srcUrl = processedImageUrl || imageDataUrl;
+        if (!imageDataUrl || isAnalyzing) return;
         try {
-            const rotated = await rotateImage90CW(srcUrl);
-            if (processedImageUrl) {
-                setProcessedImageUrl(rotated.dataUrl);
-            } else {
-                setImageDataUrl(rotated.dataUrl);
-            }
+            const rotated = await rotateImage90CW(imageDataUrl);
+            setImageDataUrl(rotated.dataUrl);
             setImageNaturalSize({ width: rotated.width, height: rotated.height });
             setWords([]);
             setSelectedWord(null);
         } catch {
             // Rotation failed
         }
-    }, [imageDataUrl, isAnalyzing, isProcessing, processedImageUrl]);
+    }, [imageDataUrl, isAnalyzing]);
 
-    // Crop & Scan: perspective correction → enhancement → OCR (full pipeline)
-    // Falls back to direct OCR (skipping OpenCV) if scan times out or fails.
-    const handleCropAndScan = useCallback(async () => {
-        if (!imageDataUrl || cropCorners.length !== 4) return;
-        setIsProcessing(true);
-        setScanError(null);
-        setWords([]);
-        setSelectedWord(null);
-        clearTranslationCache();
-        setTranslationCache({});
-
-        const SCAN_TIMEOUT = 45_000; // 45 seconds max for the scan step
-
-        let ocrTarget = imageDataUrl; // fallback: analyze original image
-
-        try {
-            // Step 1: Perspective correction + shadow removal + enhancement (with timeout)
-            const result = await Promise.race([
-                cropAndEnhance(imageDataUrl, cropCorners, scanMode),
-                new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error('Scan timed out — falling back to direct analysis')), SCAN_TIMEOUT)
-                ),
-            ]);
-            setProcessedImageUrl(result.dataUrl);
-            setImageNaturalSize({ width: result.width, height: result.height });
-            ocrTarget = result.dataUrl;
-        } catch (e) {
-            console.warn('Crop & scan failed, falling back to direct OCR:', e);
-            setScanError(e instanceof Error ? e.message : 'Scan failed — analyzing original image');
-        }
-
-        setIsCropping(false);
-        setIsProcessing(false);
-
-        // Step 2: OCR on processed (or original) image
-        try {
-            const ocrResult = await analyze(ocrTarget, userLevel, ocrEngine);
-            setWords(ocrResult.words);
-            setSkewAngle(ocrResult.skewAngle);
-            const finalCache = prefetchTranslations(
-                ocrResult.words.map(w => ({ text: w.text })),
-            );
-            setTranslationCache(finalCache);
-        } catch (e) {
-            console.error('OCR failed:', e);
-            setScanError(e instanceof Error ? e.message : 'OCR analysis failed');
-        }
-    }, [imageDataUrl, cropCorners, scanMode, analyze, userLevel, ocrEngine]);
-
-    // Reset crop: go back to cropping mode
-    const handleResetCrop = useCallback(() => {
-        setProcessedImageUrl(null);
-        setWords([]);
-        setSelectedWord(null);
-        setScanError(null);
-        setImageNaturalSize(originalNaturalSize);
-        setIsCropping(true);
-    }, [originalNaturalSize]);
-
-    // Skip scanning: go directly to analyze on original image
-    const handleSkipScan = useCallback(async () => {
-        if (!imageDataUrl) return;
-        setIsCropping(false);
-        setProcessedImageUrl(null);
-        setImageNaturalSize(originalNaturalSize);
-
+    // Handle analyze
+    const handleAnalyze = useCallback(async () => {
+        if (!imageDataUrl || isAnalyzing) return;
         setWords([]);
         setSelectedWord(null);
         clearTranslationCache();
@@ -257,30 +153,12 @@ export default function Home() {
         const ocrResult = await analyze(imageDataUrl, userLevel, ocrEngine);
         setWords(ocrResult.words);
         setSkewAngle(ocrResult.skewAngle);
-        const finalCache = prefetchTranslations(
-            ocrResult.words.map(w => ({ text: w.text })),
-        );
-        setTranslationCache(finalCache);
-    }, [imageDataUrl, analyze, userLevel, ocrEngine, originalNaturalSize]);
-
-    // Handle analyze — runs OCR on the currently displayed image
-    const handleAnalyze = useCallback(async () => {
-        if (!imageDataUrl || isAnalyzing) return;
-        const ocrTarget = processedImageUrl || imageDataUrl;
-        setWords([]);
-        setSelectedWord(null);
-        clearTranslationCache();
-        setTranslationCache({});
-
-        const ocrResult = await analyze(ocrTarget, userLevel, ocrEngine);
-        setWords(ocrResult.words);
-        setSkewAngle(ocrResult.skewAngle);
 
         const finalCache = prefetchTranslations(
             ocrResult.words.map(w => ({ text: w.text })),
         );
         setTranslationCache(finalCache);
-    }, [imageDataUrl, processedImageUrl, isAnalyzing, analyze, userLevel, ocrEngine]);
+    }, [imageDataUrl, isAnalyzing, analyze, userLevel, ocrEngine]);
 
     // Handle user level change — re-classify words dynamically
     const handleLevelChange = useCallback(
@@ -468,9 +346,9 @@ export default function Home() {
                 )}
 
                 {/* Error message */}
-                {(error || scanError) && (
+                {error && (
                     <div className="mt-6 p-4 bg-red-950/50 border border-red-800/50 rounded-xl text-red-300 text-sm">
-                        <span className="font-semibold">Error:</span> {error || scanError}
+                        <span className="font-semibold">Error:</span> {error}
                     </div>
                 )}
 
@@ -674,35 +552,14 @@ export default function Home() {
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                                 ref={imageRef}
-                                src={isCropping ? imageDataUrl : (processedImageUrl || imageDataUrl)}
+                                src={imageDataUrl}
                                 alt="Uploaded text"
                                 onLoad={handleImageLoad}
                                 className="block max-w-full h-auto"
-                                style={{ maxHeight: isCropping ? '55vh' : '70vh' }}
+                                style={{ maxHeight: '70vh' }}
                             />
 
-                            {/* Crop overlay for corner dragging */}
-                            {isCropping && imageDisplaySize.width > 0 && (
-                                <CropOverlay
-                                    corners={cropCorners}
-                                    onChange={setCropCorners}
-                                    imageWidth={imageDisplaySize.width}
-                                    imageHeight={imageDisplaySize.height}
-                                    disabled={isProcessing}
-                                />
-                            )}
-
-                            {/* Processing spinner */}
-                            {isProcessing && (
-                                <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-950/60 backdrop-blur-sm rounded-xl">
-                                    <div className="flex items-center gap-3 px-4 py-3 bg-gray-900/90 rounded-lg border border-gray-700/50">
-                                        <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                                        <span className="text-sm text-gray-300">Processing scan...</span>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Highlight overlay — always show when words exist (coordinates now match display image) */}
+                            {/* Highlight overlay */}
                             {words.length > 0 && imageDisplaySize.width > 0 && (
                                 <HighlightOverlay
                                     words={words}
@@ -717,90 +574,47 @@ export default function Home() {
                         </div>
 
                         {/* Actions */}
-                        <div className="mt-4 flex flex-wrap gap-3">
+                        <div className="mt-4 flex gap-3">
                             <button
                                 onClick={() => {
                                     setImageDataUrl(null);
                                     setWords([]);
                                     setSelectedWord(null);
-                                    setProcessedImageUrl(null);
-                                    setIsCropping(false);
-                                    setCropCorners([]);
-                                    setScanError(null);
                                     handleSearchClear();
                                 }}
                                 className="px-4 py-2 text-sm rounded-lg border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-all duration-200"
                             >
-                                Upload New
+                                Upload New Image
                             </button>
-
-                            {isCropping ? (
-                                <>
-                                    {/* Crop mode buttons */}
-                                    <button
-                                        onClick={handleCropAndScan}
-                                        disabled={isProcessing}
-                                        className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow-lg shadow-amber-500/25 hover:shadow-amber-500/40 transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5"
-                                    >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                        </svg>
-                                        Crop & Scan
-                                    </button>
-                                    <button
-                                        onClick={handleSkipScan}
-                                        disabled={isProcessing || isAnalyzing}
-                                        className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-all duration-200 disabled:opacity-50"
-                                    >
-                                        Skip
-                                    </button>
-                                </>
-                            ) : (
-                                <>
-                                    {/* Post-crop / scanner-off buttons */}
-                                    <button
-                                        onClick={handleRotate}
-                                        disabled={isAnalyzing || isProcessing}
-                                        className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5"
-                                        title="Rotate 90° clockwise"
-                                    >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                                            />
-                                        </svg>
-                                        Rotate
-                                    </button>
-                                    {processedImageUrl && (
-                                        <button
-                                            onClick={handleResetCrop}
-                                            disabled={isAnalyzing}
-                                            className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5"
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                                            </svg>
-                                            Re-crop
-                                        </button>
-                                    )}
-                                    <button
-                                        onClick={handleAnalyze}
-                                        disabled={isAnalyzing}
-                                        className={`px-4 py-2 text-sm rounded-lg transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5 ${
-                                            words.length === 0
-                                                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow-lg shadow-amber-500/25 hover:shadow-amber-500/40'
-                                                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                                        }`}
-                                    >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                                            />
-                                        </svg>
-                                        {words.length === 0 ? 'Analyze' : 'Re-Analyze'}
-                                    </button>
-                                </>
-                            )}
+                            <button
+                                onClick={handleRotate}
+                                disabled={isAnalyzing}
+                                className="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5"
+                                title="Rotate 90° clockwise"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                    />
+                                </svg>
+                                Rotate
+                            </button>
+                            <button
+                                onClick={handleAnalyze}
+                                disabled={isAnalyzing}
+                                className={`px-4 py-2 text-sm rounded-lg transition-all duration-200 disabled:opacity-50 flex items-center gap-1.5 ${
+                                    words.length === 0
+                                        ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow-lg shadow-amber-500/25 hover:shadow-amber-500/40'
+                                        : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                                }`}
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                                    />
+                                </svg>
+                                {words.length === 0 ? 'Analyze' : 'Re-Analyze'}
+                            </button>
                         </div>
                     </div>
                 )}
@@ -852,8 +666,6 @@ export default function Home() {
                 onPositionChange={setPopupPositionMode}
                 ocrEngine={ocrEngine}
                 onOcrEngineChange={setOcrEngine}
-                scanMode={scanMode}
-                onScanModeChange={setScanMode}
             />
         </main>
     );

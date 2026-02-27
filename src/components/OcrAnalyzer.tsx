@@ -816,6 +816,7 @@ export function useOcr(): UseOcrResult {
                         return result;
                     } catch (e) {
                         console.warn('PaddleOCR failed, falling back to Tesseract:', e);
+                        // Fall through to Tesseract
                     }
                 }
 
@@ -828,6 +829,7 @@ export function useOcr(): UseOcrResult {
                     },
                 });
 
+                // Enable Orientation and Script Detection (OSD) for slanted/rotated text
                 await worker.setParameters({
                     tessedit_pageseg_mode: PSM.AUTO_OSD,
                 });
@@ -835,6 +837,7 @@ export function useOcr(): UseOcrResult {
                 const result = await worker.recognize(preprocess.ocrUrl);
                 const pad = preprocess.padding;
 
+                // Extract words and adjust bboxes for padding offset
                 const ocrWords: RawWord[] = result.data.words
                     .filter((w) => w.text.trim().length > 0)
                     .filter((w) => w.confidence >= 40)

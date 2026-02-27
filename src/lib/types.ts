@@ -2,13 +2,6 @@
 import { CEFRLevel, RelativeDifficulty } from './wordLevels';
 
 export type OcrEngine = 'tesseract' | 'paddleocr';
-export type ScanMode = 'enhanced' | 'bw' | 'off';
-
-/** A corner point in normalized 0-1 coordinates (fraction of image width/height) */
-export interface Corner {
-    x: number;
-    y: number;
-}
 
 export interface OcrWord {
     text: string;
