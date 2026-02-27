@@ -2,6 +2,7 @@
  * Lazy-loads OpenCV.js from CDN with fallback.
  * Caches the Promise so subsequent calls resolve immediately.
  * Resets cache on failure to allow retry.
+ * Includes timeouts to prevent infinite hangs on mobile.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -14,29 +15,45 @@ const CDN_URLS = [
     'https://docs.opencv.org/4.9.0/opencv.js',
 ];
 
+/** Per-script load + WASM init timeout (ms) */
+const SCRIPT_TIMEOUT = 30_000;
+
 function tryLoadScript(url: string): Promise<OpenCV> {
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = url;
         script.async = true;
 
+        const timer = setTimeout(() => {
+            script.remove();
+            reject(new Error(`OpenCV.js load timed out from ${url}`));
+        }, SCRIPT_TIMEOUT);
+
         script.onload = () => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const cv = (window as any).cv;
             if (cv && cv.onRuntimeInitialized !== undefined) {
                 if (cv.Mat) {
+                    clearTimeout(timer);
                     resolve(cv);
                 } else {
-                    cv.onRuntimeInitialized = () => resolve(cv);
+                    // WASM not yet ready — wait for init callback (timer still active)
+                    cv.onRuntimeInitialized = () => {
+                        clearTimeout(timer);
+                        resolve(cv);
+                    };
                 }
             } else if (cv) {
+                clearTimeout(timer);
                 resolve(cv);
             } else {
+                clearTimeout(timer);
                 reject(new Error('OpenCV.js loaded but cv object not found'));
             }
         };
 
         script.onerror = () => {
+            clearTimeout(timer);
             script.remove();
             reject(new Error(`Failed to load OpenCV.js from ${url}`));
         };

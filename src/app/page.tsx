@@ -184,6 +184,7 @@ export default function Home() {
     }, [imageDataUrl, isAnalyzing, isProcessing, processedImageUrl]);
 
     // Crop & Scan: perspective correction → enhancement → OCR (full pipeline)
+    // Falls back to direct OCR (skipping OpenCV) if scan times out or fails.
     const handleCropAndScan = useCallback(async () => {
         if (!imageDataUrl || cropCorners.length !== 4) return;
         setIsProcessing(true);
@@ -193,16 +194,32 @@ export default function Home() {
         clearTranslationCache();
         setTranslationCache({});
 
+        const SCAN_TIMEOUT = 45_000; // 45 seconds max for the scan step
+
+        let ocrTarget = imageDataUrl; // fallback: analyze original image
+
         try {
-            // Step 1: Perspective correction + shadow removal + enhancement
-            const result = await cropAndEnhance(imageDataUrl, cropCorners, scanMode);
+            // Step 1: Perspective correction + shadow removal + enhancement (with timeout)
+            const result = await Promise.race([
+                cropAndEnhance(imageDataUrl, cropCorners, scanMode),
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('Scan timed out — falling back to direct analysis')), SCAN_TIMEOUT)
+                ),
+            ]);
             setProcessedImageUrl(result.dataUrl);
             setImageNaturalSize({ width: result.width, height: result.height });
-            setIsCropping(false);
-            setIsProcessing(false);
+            ocrTarget = result.dataUrl;
+        } catch (e) {
+            console.warn('Crop & scan failed, falling back to direct OCR:', e);
+            setScanError(e instanceof Error ? e.message : 'Scan failed — analyzing original image');
+        }
 
-            // Step 2: OCR on the processed image
-            const ocrResult = await analyze(result.dataUrl, userLevel, ocrEngine);
+        setIsCropping(false);
+        setIsProcessing(false);
+
+        // Step 2: OCR on processed (or original) image
+        try {
+            const ocrResult = await analyze(ocrTarget, userLevel, ocrEngine);
             setWords(ocrResult.words);
             setSkewAngle(ocrResult.skewAngle);
             const finalCache = prefetchTranslations(
@@ -210,9 +227,8 @@ export default function Home() {
             );
             setTranslationCache(finalCache);
         } catch (e) {
-            console.error('Crop & scan failed:', e);
-            setScanError(e instanceof Error ? e.message : 'Scan processing failed');
-            setIsProcessing(false);
+            console.error('OCR failed:', e);
+            setScanError(e instanceof Error ? e.message : 'OCR analysis failed');
         }
     }, [imageDataUrl, cropCorners, scanMode, analyze, userLevel, ocrEngine]);
 
