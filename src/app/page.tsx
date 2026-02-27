@@ -17,7 +17,7 @@ import {
     getWordLevel,
 } from '@/src/lib/wordLevels';
 import { OcrWord, OcrEngine, ScanMode, Corner } from '@/src/lib/types';
-import { detectDocumentCorners, cropAndEnhance } from '@/src/lib/document-scanner';
+import { cropAndEnhance } from '@/src/lib/document-scanner';
 import { prefetchTranslations, clearTranslationCache, translateSingleWord, translatePhrase, getSuggestions, Suggestion } from '@/src/lib/translationCache';
 import { getRelatedPhrasalVerbs, PhrasalVerbEntry } from '@/src/lib/phrasalVerbs';
 import { decomposeWord, MorphemeDecomposition } from '@/src/lib/morphemeAnalyzer';
@@ -153,17 +153,12 @@ export default function Home() {
                 );
                 setTranslationCache(finalCache);
             } else {
-                // Scanner ON → enter crop mode, try auto-detection
-                // Set default corners BEFORE entering crop mode to avoid
-                // rendering CropOverlay with empty corners (causes full dark overlay)
+                // Scanner ON → enter crop mode with default corners.
+                // OpenCV.js is NOT loaded here — it loads lazily when the
+                // user clicks "Crop & Scan", avoiding a heavy WASM download
+                // and main-thread freeze on mobile.
                 setCropCorners(DEFAULT_CORNERS);
                 setIsCropping(true);
-                try {
-                    const detected = await detectDocumentCorners(dataUrl);
-                    if (detected) setCropCorners(detected);
-                } catch {
-                    // Keep DEFAULT_CORNERS already set above
-                }
             }
         },
         [analyze, userLevel, ocrEngine, scanMode]
@@ -667,7 +662,7 @@ export default function Home() {
                                 alt="Uploaded text"
                                 onLoad={handleImageLoad}
                                 className="block max-w-full h-auto"
-                                style={{ maxHeight: '70vh' }}
+                                style={{ maxHeight: isCropping ? '55vh' : '70vh' }}
                             />
 
                             {/* Crop overlay for corner dragging */}
@@ -688,28 +683,6 @@ export default function Home() {
                                         <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
                                         <span className="text-sm text-gray-300">Processing scan...</span>
                                     </div>
-                                </div>
-                            )}
-
-                            {/* Floating crop action buttons (visible on mobile without scrolling) */}
-                            {isCropping && !isProcessing && (
-                                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2">
-                                    <button
-                                        onClick={handleCropAndScan}
-                                        className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold shadow-lg shadow-black/40 flex items-center gap-1.5"
-                                    >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                        </svg>
-                                        Crop &amp; Scan
-                                    </button>
-                                    <button
-                                        onClick={handleSkipScan}
-                                        disabled={isAnalyzing}
-                                        className="px-4 py-2 text-sm rounded-lg bg-gray-800/90 text-gray-300 shadow-lg shadow-black/40 backdrop-blur-sm disabled:opacity-50"
-                                    >
-                                        Skip
-                                    </button>
                                 </div>
                             )}
 
