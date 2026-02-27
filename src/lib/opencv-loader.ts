@@ -1,5 +1,5 @@
 /**
- * Lazy-loads OpenCV.js 4.9.0 from CDN.
+ * Lazy-loads OpenCV.js from CDN with fallback.
  * Caches the Promise so subsequent calls resolve immediately.
  * Resets cache on failure to allow retry.
  */
@@ -9,33 +9,21 @@ type OpenCV = any;
 
 let loadPromise: Promise<OpenCV> | null = null;
 
-export function loadOpenCV(): Promise<OpenCV> {
-    if (typeof window === 'undefined') {
-        return Promise.reject(new Error('OpenCV.js requires a browser environment'));
-    }
+const CDN_URLS = [
+    'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.3/opencv.js',
+    'https://docs.opencv.org/4.9.0/opencv.js',
+];
 
-    // Return cached promise if already loading/loaded
-    if (loadPromise) return loadPromise;
-
-    loadPromise = new Promise<OpenCV>((resolve, reject) => {
-        // Already loaded (e.g. from a previous page navigation)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        if ((window as any).cv && (window as any).cv.Mat) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            resolve((window as any).cv);
-            return;
-        }
-
+function tryLoadScript(url: string): Promise<OpenCV> {
+    return new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = 'https://docs.opencv.org/4.9.0/opencv.js';
+        script.src = url;
         script.async = true;
 
         script.onload = () => {
-            // OpenCV.js sets window.cv but may need a tick to initialize WASM
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const cv = (window as any).cv;
             if (cv && cv.onRuntimeInitialized !== undefined) {
-                // WASM not yet ready — wait for callback
                 if (cv.Mat) {
                     resolve(cv);
                 } else {
@@ -44,18 +32,48 @@ export function loadOpenCV(): Promise<OpenCV> {
             } else if (cv) {
                 resolve(cv);
             } else {
-                loadPromise = null;
                 reject(new Error('OpenCV.js loaded but cv object not found'));
             }
         };
 
         script.onerror = () => {
-            loadPromise = null;
-            reject(new Error('Failed to load OpenCV.js from CDN'));
+            script.remove();
+            reject(new Error(`Failed to load OpenCV.js from ${url}`));
         };
 
         document.head.appendChild(script);
     });
+}
+
+export function loadOpenCV(): Promise<OpenCV> {
+    if (typeof window === 'undefined') {
+        return Promise.reject(new Error('OpenCV.js requires a browser environment'));
+    }
+
+    if (loadPromise) return loadPromise;
+
+    loadPromise = (async () => {
+        // Already loaded (e.g. from a previous page navigation)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((window as any).cv && (window as any).cv.Mat) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            return (window as any).cv;
+        }
+
+        for (const url of CDN_URLS) {
+            try {
+                return await tryLoadScript(url);
+            } catch {
+                // Try next CDN
+            }
+        }
+
+        loadPromise = null;
+        throw new Error('Failed to load OpenCV.js from all CDN sources');
+    })();
+
+    // Reset cache on failure so user can retry
+    loadPromise.catch(() => { loadPromise = null; });
 
     return loadPromise;
 }
